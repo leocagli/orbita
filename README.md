@@ -1,8 +1,8 @@
-# stellar-protege
+# Órbita, de Cosmos (repo: stellar-protege)
 
-dApp educativa sobre Stellar para concientizar a menores y a sus familias sobre las apuestas y los casinos online. El nombre es de trabajo.
+App educativa para adolescentes y sus familias frente a las apuestas online. Propone una pausa con información en vez de bloquear, le da al adulto un resumen de conducta y señales para conversar, y acerca ayuda profesional a los dos. No diagnostica ni trata.
 
-> **Estado:** tanda 1. Hay contratos Soroban con tests y despliegue en testnet. La app Android y el backend todavía no existen: el plan está en [docs/arquitectura.md](docs/arquitectura.md).
+> **Estado:** research, diseño y contratos listos; app Android y backend todavía no existen. Plan en [docs/arquitectura.md](docs/arquitectura.md), marca y pantallas en [docs/diseno.md](docs/diseno.md). Los contratos Soroban quedaron como capa opcional: `family-registry` audita el estado del vínculo y `learning-badges` quedó fuera del producto.
 
 ## Principios
 

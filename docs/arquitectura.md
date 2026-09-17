@@ -1,13 +1,17 @@
-# Arquitectura (borrador, tanda 1)
+# Arquitectura (borrador, revisado 2026-09-17)
 
-Nombre de trabajo: **stellar-protege**. No usa marca, dominio ni nombre de ningún organismo público.
+Producto: **Órbita, de Cosmos** (nombre de trabajo del repo: stellar-protege). No usa marca, dominio ni nombre de ningún organismo público. Marca y pantallas en [diseno.md](diseno.md).
+
+Alcance: modo educativo con notificaciones al adulto, señales de conducta y derivación a ayuda. Frente a la ludopatía adolescente, la app **previene y ayuda a detectar a tiempo**; no diagnostica ni trata. Fundamentos en `stellar-ai-workshop-starter/research/deteccion-temprana-derivacion.md`.
 
 ## Principios
 
 1. **Educar, no prohibir.** Cuando el menor entra a un sitio de apuestas ve una pantalla educativa con opción de seguir. El padre recibe la alerta. No hay bloqueo duro por defecto.
 2. **Transparencia con el menor.** La protección siempre se ve (notificación persistente) y el menor sabe qué registra la app y qué no. Hace falta consentimiento del padre más asentimiento del adolescente.
-3. **Nada de datos de menores on-chain.** La blockchain guarda vínculos entre direcciones seudónimas, hashes de consentimiento e insignias. La navegación queda en el dispositivo y, cifrada, en el canal hacia el padre.
-4. **Reutilizar lo que ya funciona** de [ba-protege](https://github.com/Bitcoindefi/ba-protege) (MIT), dejando su aviso de copyright.
+3. **Nada de datos de menores on-chain, y la cadena fuera del camino crítico.** La app y las notificaciones funcionan enteras sin blockchain. Stellar queda como capa opcional (ver "Qué va on-chain").
+4. **Conducta, no salud.** Al adulto se le muestra conducta observable y agregada ("5 pausas esta semana"), nunca inferencias como "riesgo de ludopatía", que serían datos sensibles (Ley 25.326). La app no dice que "detecta" ni "previene" una patología (ANMAT 64/2025).
+5. **Ayuda sin condiciones.** El adolescente puede pedir ayuda desde la app sin que se avise al adulto.
+6. **Reutilizar lo que ya funciona** de [ba-protege](https://github.com/Bitcoindefi/ba-protege) (MIT), dejando su aviso de copyright.
 
 ## Componentes
 
@@ -20,11 +24,16 @@ Nombre de trabajo: **stellar-protege**. No usa marca, dominio ni nombre de ning�
  │ · pantalla educativa │   padre)     └────────────────┘         │   padres         │
  │ · onRevoke / admin   │                                          └────────┬─────────┘
  └──────────┬───────────┘                                                   │
-            │  aceptar vínculo, recibir insignias      proponer vínculo     │
+            │                                                               │
             ▼                                                               ▼
-        ┌──────────────────────── Stellar (Soroban) ───────────────────────────┐
-        │ family-registry: vínculo padre/hijo + hash y versión de consentimiento│
-        │ learning-badges: insignias educativas no transferibles                │
+        ┌──────────── registro de consentimientos (backend, firmado) ──────────┐
+        │ consentimiento del adulto, asentimiento y revocación del adolescente  │
+        └──────────────────────────────┬────────────────────────────────────────┘
+                                       │ opcional, best effort
+                                       ▼
+        ┌──────── capa de auditoría opcional ──────────────────────────────────┐
+        │ family-registry en Stellar (estado del vínculo) y anclaje de métricas │
+        │ agregadas (BFA o RFC 3161 para compradores públicos)                  │
         └───────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -38,8 +47,8 @@ Se reutiliza de ba-protege y se adapta:
 | `ProtegeVpnService.kt` + `DnsPaquete.kt` | Modo observación: resuelve todo y registra lo marcado. `onRevoke()` genera el evento "protección desactivada". |
 | `NavegacionAccessibilityService.kt` | **Fuera del MVP.** La política de Play pide aprobación para accesibilidad y la pantalla educativa se puede disparar desde el filtro DNS. |
 | `ProtegeDeviceAdminReceiver.kt` | Solo para avisar si se desactiva el admin, que es el paso previo a desinstalar. No bloquea nada. |
-| `PantallaCorteActivity.kt` | Pasa a pantalla educativa: qué es, cómo gana siempre la casa, líneas de ayuda y botón "seguir igual". |
-| `Registro.kt` / `EventoEntity` | Cola de salida hacia el backend, cifrada para la clave del padre, con retención de 90 días que sí se aplique. |
+| `PantallaCorteActivity.kt` | Pasa a la pantalla **Pausa**: un dato concreto, una pregunta y los botones "Seguir igual" y "Salir". Sin cuenta regresiva ni culpa. |
+| `Registro.kt` / `EventoEntity` | Cola de salida hacia el backend, cifrada para la clave del adulto, con retención de 90 días que sí se aplique. Las pausas se **deduplican por sesión** (una visita genera muchas consultas DNS) y se agregan por semana antes de mostrarse. |
 
 Requisitos de Google Play:
 - declarar VpnService para control parental;
@@ -49,23 +58,29 @@ Requisitos de Google Play:
 
 ### App del padre (Android, variante `control`)
 
-- Lista de menores vinculados y su estado: protegido, protección desactivada o sin latido.
-- Alertas de sitios marcados, agrupadas por categoría.
-- Contenido educativo para padres: cómo hablar del tema y señales de alerta.
+- Lista de adolescentes vinculados y su estado: protección activa, desactivada o sin reportes.
+- Tendencia semanal de pausas por adolescente, sin dominios ni horarios exactos por defecto.
+- Señales para observar fuera del teléfono, guía para conversar y directorio de ayuda por provincia.
+- Notificaciones: resumen semanal, protección desactivada, sin reportes y vínculo revocado. Nunca una por cada pausa.
 
 ### Backend
 
 - **Relay de eventos:** recibe blobs cifrados de punta a punta y los reenvía por push. No tiene la clave para leerlos.
 - **Latido:** el dispositivo reporta cada N minutos. Si pasan M sin reporte, el padre recibe "el teléfono dejó de reportar". El texto tiene que decir que puede ser falta de conexión o desinstalación, porque no se distinguen.
-- **Emisor de insignias:** tiene el rol `issuer` en `learning-badges` y la otorga cuando se completa un módulo.
+- **Registro de consentimientos:** log firmado de solo agregado con el texto exacto mostrado, su versión, la verificación de identidad del adulto, el asentimiento del adolescente y las revocaciones. Es la prueba real del consentimiento (Decreto 1558/2001, art. 5); un hash en una cadena solo prueba integridad y fecha.
+- **Progreso educativo:** módulos completados por usuario, en el backend. Si más adelante hacen falta credenciales portables, Open Badges; nunca tokens.
+- **Directorio de ayuda:** líneas y centros por provincia con fecha de verificación, revisado cada trimestre.
 
-### Contratos Soroban (esta tanda)
+### Contratos Soroban
 
-Stack: Rust + `soroban-sdk 26.1.x` + OpenZeppelin Stellar `=0.7.2`. Testnet (protocolo 28).
+Stack: Rust + `soroban-sdk 26.1.x` + OpenZeppelin Stellar `=0.7.2`. Testnet (protocolo 28). Los dos contratos de la tanda 1 siguen en el repo, con tests y desplegados en testnet, pero su rol cambió:
+
+- **`family-registry`:** capa de auditoría **opcional** del estado del vínculo. Se escribe desde el backend, en forma asincrónica y best effort; si falla, nada del producto se detiene. En mainnet el backend tendría que extender el TTL de los vínculos activos, porque una entrada persistente se archiva a los ~201 días sin extensión.
+- **`learning-badges`:** **fuera del producto.** Poner insignias en una cadena pública expone direcciones de menores sin aportar nada. Queda como referencia técnica; se puede borrar en la próxima limpieza.
 
 #### `family-registry`
 
-Registro inmutable, sin admin. Un vínculo por par (padre, menor).
+Registro inmutable, sin admin. Un vínculo por par (adulto, adolescente).
 
 | Función | Auth | Efecto |
 |---|---|---|
@@ -95,11 +110,15 @@ Las firmas exactas quedan en `contracts/*/src/lib.rs`.
 
 | Dato | Dónde |
 |---|---|
-| Vínculo padre/menor (direcciones seudónimas), estado, hash y versión de consentimiento | Stellar |
-| Insignias educativas | Stellar |
-| Dominios visitados, horarios, categorías, eventos de desactivación | Dispositivo + relay cifrado para el padre |
+| Consentimiento, asentimiento y revocaciones, con el texto mostrado | Registro firmado en el backend |
+| Estado del vínculo (direcciones seudónimas, hash y versión) | Stellar, opcional y best effort |
+| Métricas agregadas para rendir cuentas a una lotería o provincia | Raíz de Merkle con sello de BFA o RFC 3161; Stellar `MEMO_HASH` solo si el comprador lo pide |
+| Progreso educativo | Backend, sin tokens |
+| Pausas (dominio, hora, categoría) y eventos de desactivación | Dispositivo + relay cifrado para el adulto, deduplicadas y agregadas |
 | Latidos, tokens de push, listas de dominios | Backend |
-| Nombre, edad, teléfono, textos de consentimiento completos | Solo en los dispositivos; on-chain va el hash |
+| Nombre, edad, teléfono | Solo en los dispositivos |
+
+Motivos del cambio respecto de la tanda 1: SCF exige que Stellar tenga un papel central, y una capa de auditoría no lo cumple; el anclaje que un tribunal argentino ya aceptó como prueba de integridad es BFA (Cámara Civil y Comercial de Morón, 2024); y un `MEMO_HASH` cuesta centavos por año, mientras que el estado persistente de Soroban exige pagar alquiler para no archivarse. Detalle en `research/viabilidad-proteccion-menores.md`, secciones 8 y 9.
 
 ## Limitaciones conocidas
 
@@ -111,10 +130,12 @@ Las firmas exactas quedan en `contracts/*/src/lib.rs`.
 
 ## Tandas
 
-1. **Esta:** research, este documento y los contratos `family-registry` y `learning-badges` con tests, desplegados en testnet.
-2. **App Android:** traer el código de ba-protege, retirar la marca oficial, motor en modo educar, pantalla educativa, `onRevoke` y emparejamiento real contra `family-registry`.
-3. **Backend:** relay cifrado, push y latido.
-4. **Cuentas y fees:** passkeys (smart accounts de OpenZeppelin) y fees con OpenZeppelin Relayer.
-5. **Más adelante:** iOS y extensión de Chrome.
+1. **Hecha:** research, este documento y los contratos con tests, desplegados en testnet.
+2. **Hecha:** viabilidad, alcance (prevenir y detectar a tiempo), marca (Órbita, de Cosmos) y brief de diseño.
+3. **Siguiente, backend mínimo:** registro de consentimientos, emparejamiento por código, relay cifrado, push y latido. Sin esto las alertas siguen saliendo en el teléfono del adolescente.
+4. **App Android:** traer el código de ba-protege, retirar la marca oficial, motor en modo pausa, deduplicación y agregado semanal, `onRevoke`, pantallas de Órbita y Órbita Familia.
+5. **Contenido:** textos de Pausa, Aprender y Conversar revisados por un equipo de salud mental; directorio verificado.
+6. **Antes de publicar:** consulta de encuadre a ANMAT, revisión legal de datos de menores, prueba cerrada en Play con `IsMonitoringTool`.
+7. **Más adelante:** anclaje de métricas para compradores públicos, iOS y extensión de Chrome.
 
 Research de respaldo: `stellar-ai-workshop-starter/research/proteccion-menores-apuestas.md`.
