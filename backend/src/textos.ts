@@ -37,6 +37,7 @@ export const AVISOS = {
   sinReportes: (alias: string, horas: number) =>
     `El teléfono de ${alias} no reporta desde hace ${Math.round(horas / 24)} días. Puede ser falta de conexión o que la app se haya desinstalado.`,
   desvinculado: (alias: string) => `${alias} desvinculó su teléfono.`,
+  vinculado: (alias: string) => `${alias} aceptó el vínculo. Desde ahora vas a recibir el resumen semanal.`,
 };
 
 export const NOTA_NO_DIAGNOSTICO =

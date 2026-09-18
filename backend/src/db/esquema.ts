@@ -1,11 +1,12 @@
 // Esquema de Órbita. Ningún dominio visitado ni dato personal del adolescente:
-// solo alias, tokens hasheados, conteos por semana y el registro de consentimientos.
-// Va como string para que el bundle de Vercel lo incluya.
+// solo alias, direcciones Stellar, tokens hasheados, conteos por semana y el registro
+// de consentimientos. Va como string para que el bundle de Vercel lo incluya.
 
 export const ESQUEMA = `
 create table if not exists adultos (
   id text primary key,
   alias text not null,
+  stellar text not null unique,
   token_hash text not null unique,
   push_token text,
   creado timestamptz not null default now()
@@ -14,6 +15,7 @@ create table if not exists adultos (
 create table if not exists dispositivos (
   id text primary key,
   alias text not null,
+  stellar text not null unique,
   token_hash text not null unique,
   version_app text,
   proteccion_activa boolean not null default true,
@@ -28,12 +30,17 @@ create table if not exists codigos (
   usado boolean not null default false
 );
 
+-- El estado espeja el contrato family-registry: el vínculo solo está activo cuando
+-- el adulto lo propuso y el adolescente lo aceptó en la cadena, cada uno con su firma.
 create table if not exists vinculos (
   id text primary key,
   adulto_id text not null references adultos(id),
   dispositivo_id text not null references dispositivos(id),
-  estado text not null check (estado in ('activo', 'revocado')),
+  estado text not null check (estado in ('esperando_adulto', 'propuesto', 'activo', 'revocado')),
   revocado_por text check (revocado_por in ('adulto', 'adolescente')),
+  tx_propuesta text,
+  tx_aceptacion text,
+  tx_revocacion text,
   creado timestamptz not null default now(),
   revocado timestamptz,
   unique (adulto_id, dispositivo_id)
@@ -72,5 +79,14 @@ create table if not exists registro_consentimientos (
   hash_previo text,
   hash text not null unique,
   firma text not null
+);
+
+-- Cada anclaje publica en Stellar el último hash del registro (MEMO_HASH).
+create table if not exists anclajes (
+  id bigserial primary key,
+  hash_registro text not null,
+  filas integer not null,
+  tx text not null,
+  creado timestamptz not null default now()
 );
 `;

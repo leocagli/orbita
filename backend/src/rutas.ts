@@ -1,33 +1,51 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Context, MiddlewareHandler } from "hono";
 import { z } from "zod";
 import type { Db } from "./db/index.js";
 import type { Push } from "./push.js";
 import { anotar, verificar } from "./registro.js";
+import { type Accion, type Cadena, type EstadoCadena, ErrorCadena, esDireccion } from "./stellar.js";
 import { AVISOS, CONSENTIMIENTOS, NOTA_NO_DIAGNOSTICO, versionVigente } from "./textos.js";
 import { ES_SEMANA, codigoDeSeisDigitos, horasEntre, id, semanaAnterior, semanaIso, sha256, token } from "./utiles.js";
 import { AYUDA as ayuda } from "./datos/ayuda.js";
 
 export interface Deps {
   db: Db | null;
+  cadena: Cadena | null;
+  configCadena: Record<string, string>;
   push: Push;
   ahora: () => Date;
   claveRegistro: string;
   cronSecret: string;
   adminToken: string;
+  /** Orígenes web permitidos (CORS). */
+  origenes: string[];
 }
 
 /** Sin latido durante este tiempo, el adulto recibe "sin reportes". */
 export const HORAS_SIN_REPORTES = 48;
 const MINUTOS_CODIGO = 10;
 
-type Vars = { adulto: { id: string; alias: string; push_token: string | null }; dispositivo: { id: string; alias: string } };
+type Adulto = { id: string; alias: string; stellar: string; push_token: string | null };
+type Dispositivo = { id: string; alias: string; stellar: string };
+type Vars = { adulto: Adulto; dispositivo: Dispositivo; rol: "adulto" | "adolescente" };
 type App = Hono<{ Variables: Vars }>;
+
+type Vinculo = {
+  id: string; estado: string; adulto_id: string; dispositivo_id: string;
+  adulto_alias: string; adulto_stellar: string; adulto_push: string | null;
+  disp_alias: string; disp_stellar: string;
+};
 
 const consentimientoSchema = z.object({
   version: z.number().int().positive(),
   texto_hash: z.string().regex(/^[0-9a-f]{64}$/),
 });
+const direccionSchema = z.string().refine(esDireccion, "direccion_stellar_invalida");
+
+const ESTADO_LOCAL: Record<EstadoCadena, string> = { Pending: "propuesto", Active: "activo", Revoked: "revocado" };
+const COLUMNA_TX: Record<Accion, string> = { propose: "tx_propuesta", accept: "tx_aceptacion", revoke: "tx_revocacion" };
 
 function bearer(c: Context): string | null {
   const h = c.req.header("authorization") ?? "";
@@ -38,28 +56,70 @@ export function crearApp(deps: Deps): App {
   const app: App = new Hono();
   const { push, ahora, claveRegistro } = deps;
 
+  app.use(
+    "*",
+    cors({
+      origin: deps.origenes,
+      allowHeaders: ["authorization", "content-type", "x-client-name", "x-client-version"],
+      allowMethods: ["GET", "POST", "OPTIONS"],
+    }),
+  );
+
   const requiereDb: MiddlewareHandler = async (c, next) => {
     if (!deps.db) return c.json({ error: "sin_base", detalle: "Falta DATABASE_URL" }, 503);
     await next();
   };
+  const requiereCadena: MiddlewareHandler = async (c, next) => {
+    if (!deps.cadena) return c.json({ error: "sin_cadena", detalle: "Falta SPONSOR_SECRET" }, 503);
+    await next();
+  };
   const db = () => deps.db as Db;
+  const cadena = () => deps.cadena as Cadena;
+
+  async function buscarAdulto(t: string) {
+    const [a] = await db().query<Adulto>("select id, alias, stellar, push_token from adultos where token_hash = $1", [sha256(t)]);
+    return a;
+  }
+  async function buscarDispositivo(t: string) {
+    const [d] = await db().query<Dispositivo>("select id, alias, stellar from dispositivos where token_hash = $1", [sha256(t)]);
+    return d;
+  }
 
   const autenticaAdulto: MiddlewareHandler<{ Variables: Vars }> = async (c, next) => {
     const t = bearer(c);
-    if (!t) return c.json({ error: "sin_token" }, 401);
-    const [a] = await db().query<Vars["adulto"]>("select id, alias, push_token from adultos where token_hash = $1", [sha256(t)]);
+    const a = t ? await buscarAdulto(t) : undefined;
     if (!a) return c.json({ error: "token_invalido" }, 401);
     c.set("adulto", a);
+    c.set("rol", "adulto");
     await next();
   };
 
   const autenticaDispositivo: MiddlewareHandler<{ Variables: Vars }> = async (c, next) => {
     const t = bearer(c);
-    if (!t) return c.json({ error: "sin_token" }, 401);
-    const [d] = await db().query<Vars["dispositivo"]>("select id, alias from dispositivos where token_hash = $1", [sha256(t)]);
+    const d = t ? await buscarDispositivo(t) : undefined;
     if (!d) return c.json({ error: "token_invalido" }, 401);
     c.set("dispositivo", d);
+    c.set("rol", "adolescente");
     await next();
+  };
+
+  /** Acepta el token del adulto o el del teléfono del adolescente. */
+  const autenticaCualquiera: MiddlewareHandler<{ Variables: Vars }> = async (c, next) => {
+    const t = bearer(c);
+    if (!t) return c.json({ error: "sin_token" }, 401);
+    const a = await buscarAdulto(t);
+    if (a) {
+      c.set("adulto", a);
+      c.set("rol", "adulto");
+      return next();
+    }
+    const d = await buscarDispositivo(t);
+    if (d) {
+      c.set("dispositivo", d);
+      c.set("rol", "adolescente");
+      return next();
+    }
+    return c.json({ error: "token_invalido" }, 401);
   };
 
   const autenticaCron: MiddlewareHandler = async (c, next) => {
@@ -68,7 +128,7 @@ export function crearApp(deps: Deps): App {
   };
 
   /** Guarda el aviso y, si hay push, lo manda. `claveUnica` evita repetir el mismo aviso. */
-  async function avisar(adulto: Vars["adulto"], tipo: string, texto: string, claveUnica: string | null) {
+  async function avisar(adulto: { id: string; push_token: string | null }, tipo: string, texto: string, claveUnica: string | null) {
     const aviso = { id: id(), tipo, texto };
     const insertado = await db().query<{ id: string }>(
       `insert into avisos (id, adulto_id, tipo, texto, creado, clave_unica) values ($1, $2, $3, $4, $5, $6)
@@ -77,11 +137,7 @@ export function crearApp(deps: Deps): App {
     );
     if (insertado.length === 0) return false;
     const llego = await push.enviar(adulto.push_token, aviso);
-    await db().query("update avisos set enviado_por = $2, enviado = $3 where id = $1", [
-      aviso.id,
-      llego ? push.nombre : "registro",
-      ahora(),
-    ]);
+    await db().query("update avisos set enviado_por = $2, enviado = $3 where id = $1", [aviso.id, llego ? push.nombre : "registro", ahora()]);
     return true;
   }
 
@@ -92,9 +148,88 @@ export function crearApp(deps: Deps): App {
     return null;
   }
 
+  async function leerVinculo(vinculoId: string) {
+    const [v] = await db().query<Vinculo>(
+      `select v.id, v.estado, v.adulto_id, v.dispositivo_id,
+              a.alias as adulto_alias, a.stellar as adulto_stellar, a.push_token as adulto_push,
+              d.alias as disp_alias, d.stellar as disp_stellar
+         from vinculos v join adultos a on a.id = v.adulto_id join dispositivos d on d.id = v.dispositivo_id
+        where v.id = $1`,
+      [vinculoId],
+    );
+    return v;
+  }
+
+  const tx = (hash: string | null) => (hash && deps.cadena ? { hash, url: deps.cadena.explorador(hash) } : hash ? { hash, url: null } : null);
+
+  /** Qué acción on-chain puede hacer cada rol en cada estado. */
+  function accionPermitida(accion: Accion, rol: Vars["rol"], estado: string) {
+    if (accion === "propose") return rol === "adulto" && (estado === "esperando_adulto" || estado === "propuesto");
+    if (accion === "accept") return rol === "adolescente" && estado === "propuesto";
+    return estado === "propuesto" || estado === "activo";
+  }
+
+  function paramsDe(v: Vinculo, accion: Accion, rol: Vars["rol"]) {
+    const firmante =
+      accion === "propose" ? v.adulto_stellar : accion === "accept" ? v.disp_stellar : rol === "adulto" ? v.adulto_stellar : v.disp_stellar;
+    return {
+      parent: v.adulto_stellar,
+      child: v.disp_stellar,
+      firmante,
+      consentHash: sha256(CONSENTIMIENTOS.adulto[versionVigente("adulto")]),
+      consentVersion: versionVigente("adulto"),
+      assentHash: sha256(CONSENTIMIENTOS.adolescente[versionVigente("adolescente")]),
+    };
+  }
+
+  /** Busca el vínculo y verifica que pertenezca a quien llama y que la acción corresponda. */
+  async function vinculoParaAccion(c: Context<{ Variables: Vars }>, accion: Accion) {
+    const v = await leerVinculo(c.req.param("id") ?? "");
+    const rol = c.get("rol");
+    const propio = v && (rol === "adulto" ? v.adulto_id === c.get("adulto").id : v.dispositivo_id === c.get("dispositivo").id);
+    if (!v || !propio) return { error: c.json({ error: "no_encontrado" }, 404) } as const;
+    if (!accionPermitida(accion, rol, v.estado)) return { error: c.json({ error: "accion_no_permitida", estado: v.estado }, 409) } as const;
+    return { v, rol } as const;
+  }
+
+  function errorDeCadena(c: Context, e: unknown) {
+    if (e instanceof ErrorCadena) return c.json({ error: "cadena", codigo: e.codigo, detalle: e.message.slice(0, 300) }, 502);
+    throw e;
+  }
+
+  /** Lleva el estado local al que dice el contrato y dispara los avisos que correspondan. */
+  async function sincronizar(v: Vinculo, estadoCadena: EstadoCadena | null, porQuien: Vars["rol"] | null) {
+    const nuevo = estadoCadena ? ESTADO_LOCAL[estadoCadena] : v.estado;
+    if (nuevo === v.estado) return nuevo;
+    if (nuevo === "revocado") {
+      await db().query("update vinculos set estado = 'revocado', revocado_por = coalesce($2, revocado_por), revocado = $3 where id = $1", [
+        v.id, porQuien, ahora(),
+      ]);
+      if (porQuien !== "adulto") {
+        await avisar({ id: v.adulto_id, push_token: v.adulto_push }, "desvinculado", AVISOS.desvinculado(v.disp_alias), `desvinculado:${v.id}`);
+      }
+    } else {
+      await db().query("update vinculos set estado = $2 where id = $1", [v.id, nuevo]);
+      if (nuevo === "activo") {
+        await avisar({ id: v.adulto_id, push_token: v.adulto_push }, "vinculado", AVISOS.vinculado(v.disp_alias), `vinculado:${v.id}`);
+      }
+    }
+    return nuevo;
+  }
+
+  const txCadena = (f: { tx_propuesta: string | null; tx_aceptacion: string | null; tx_revocacion: string | null }) => ({
+    propuesta: tx(f.tx_propuesta),
+    aceptacion: tx(f.tx_aceptacion),
+    revocacion: tx(f.tx_revocacion),
+  });
+
   // ---------- Público ----------
 
-  app.get("/v1/salud", (c) => c.json({ ok: true, base: Boolean(deps.db), push: push.nombre, ahora: ahora().toISOString() }));
+  app.get("/v1/salud", (c) =>
+    c.json({ ok: true, base: Boolean(deps.db), cadena: deps.cadena?.red ?? null, push: push.nombre, ahora: ahora().toISOString() }),
+  );
+
+  app.get("/v1/stellar/config", (c) => c.json(deps.configCadena));
 
   app.get("/v1/consentimientos/:tipo", (c) => {
     const tipo = c.req.param("tipo");
@@ -112,25 +247,56 @@ export function crearApp(deps: Deps): App {
     return c.json({ fecha_verificacion: ayuda.fecha_verificacion, nota: ayuda.nota, servicios });
   });
 
+  /** Paga el despliegue de una cuenta inteligente con passkey (solo el WASM aceptado). */
+  app.post("/v1/stellar/cuentas", requiereCadena, async (c) => {
+    const body = z.object({ func: z.string().min(1).max(20_000), auth: z.array(z.string().max(20_000)).max(4) }).safeParse(await c.req.json());
+    if (!body.success) return c.json({ error: "cuerpo_invalido" }, 400);
+    try {
+      const hash = await cadena().crearCuenta(body.data.func, body.data.auth);
+      return c.json({ ok: true, tx: tx(hash) }, 201);
+    } catch (e) {
+      return errorDeCadena(c, e);
+    }
+  });
+
+  /**
+   * Mismo servicio con el protocolo de relayer de smart-account-kit, para que el kit
+   * registre él mismo el despliegue de la cuenta. Solo acepta despliegues de cuentas.
+   */
+  app.post("/v1/stellar/relayer", async (c) => {
+    if (!deps.cadena) return c.json({ success: false, error: "Falta SPONSOR_SECRET", code: "UNAUTHORIZED" }, 503);
+    const body = z.object({ func: z.string().min(1).max(20_000), auth: z.array(z.string().max(20_000)).max(4) }).safeParse(await c.req.json());
+    if (!body.success) return c.json({ success: false, error: "Parámetros inválidos", code: "INVALID_PARAMS" }, 400);
+    try {
+      const hash = await cadena().crearCuenta(body.data.func, body.data.auth);
+      return c.json({ success: true, data: { hash, status: "success" } });
+    } catch (e) {
+      if (!(e instanceof ErrorCadena)) throw e;
+      const code = e.codigo === "simulacion_fallida" ? "SIMULATION_FAILED" : e.codigo === "transaccion_fallida" ? "ONCHAIN_FAILED" : "INVALID_PARAMS";
+      return c.json({ success: false, error: e.message.slice(0, 300), code }, 400);
+    }
+  });
+
   // ---------- Adulto ----------
 
   app.post("/v1/adultos", requiereDb, async (c) => {
-    const body = z.object({ alias: z.string().trim().min(1).max(40), consentimiento: consentimientoSchema }).safeParse(await c.req.json());
+    const body = z
+      .object({ alias: z.string().trim().min(1).max(40), stellar: direccionSchema, consentimiento: consentimientoSchema })
+      .safeParse(await c.req.json());
     if (!body.success) return c.json({ error: "cuerpo_invalido", detalle: body.error.issues }, 400);
     const problema = validarConsentimiento("adulto", body.data.consentimiento);
     if (problema) return c.json({ error: problema }, 400);
+    const [yaExiste] = await db().query("select 1 from adultos where stellar = $1", [body.data.stellar]);
+    if (yaExiste) return c.json({ error: "cuenta_ya_registrada" }, 409);
 
     const adultoId = id();
     const t = token();
-    await db().query("insert into adultos (id, alias, token_hash, creado) values ($1, $2, $3, $4)", [adultoId, body.data.alias, sha256(t), ahora()]);
+    await db().query("insert into adultos (id, alias, stellar, token_hash, creado) values ($1, $2, $3, $4, $5)", [
+      adultoId, body.data.alias, body.data.stellar, sha256(t), ahora(),
+    ]);
     await anotar(db(), claveRegistro, {
-      sujeto_tipo: "adulto",
-      sujeto_id: adultoId,
-      accion: "otorgado",
-      version: body.data.consentimiento.version,
-      texto_hash: body.data.consentimiento.texto_hash,
-      contexto: "alta",
-      ts: ahora(),
+      sujeto_tipo: "adulto", sujeto_id: adultoId, accion: "otorgado", version: body.data.consentimiento.version,
+      texto_hash: body.data.consentimiento.texto_hash, contexto: "alta", ts: ahora(),
     });
     return c.json({ adulto_id: adultoId, token: t }, 201);
   });
@@ -148,10 +314,12 @@ export function crearApp(deps: Deps): App {
     const actual = semanaIso(ahora());
     const anterior = semanaAnterior(ahora());
     const filas = await db().query<{
-      vinculo_id: string; estado: string; revocado_por: string | null; dispositivo_id: string; alias: string;
+      vinculo_id: string; estado: string; revocado_por: string | null; alias: string; stellar: string;
       proteccion_activa: boolean; ultimo_latido: string | null; actual: number | null; anterior: number | null;
+      tx_propuesta: string | null; tx_aceptacion: string | null; tx_revocacion: string | null;
     }>(
-      `select v.id as vinculo_id, v.estado, v.revocado_por, d.id as dispositivo_id, d.alias, d.proteccion_activa, d.ultimo_latido,
+      `select v.id as vinculo_id, v.estado, v.revocado_por, v.tx_propuesta, v.tx_aceptacion, v.tx_revocacion,
+              d.alias, d.stellar, d.proteccion_activa, d.ultimo_latido,
               (select cantidad from pausas_semana p where p.dispositivo_id = d.id and p.semana = $2) as actual,
               (select cantidad from pausas_semana p where p.dispositivo_id = d.id and p.semana = $3) as anterior
          from vinculos v join dispositivos d on d.id = v.dispositivo_id
@@ -160,25 +328,27 @@ export function crearApp(deps: Deps): App {
     );
     return c.json({
       alias: adulto.alias,
+      stellar: adulto.stellar,
       nota: NOTA_NO_DIAGNOSTICO,
       vinculos: filas.map((f) => ({
         vinculo_id: f.vinculo_id,
         estado: f.estado,
         revocado_por: f.revocado_por,
         adolescente: f.alias,
+        adolescente_stellar: f.stellar,
         proteccion_activa: f.proteccion_activa,
         ultimo_latido: f.ultimo_latido,
-        sin_reportes: !f.ultimo_latido || horasEntre(new Date(f.ultimo_latido), ahora()) >= HORAS_SIN_REPORTES,
-        pausas: { semana: actual, actual: Number(f.actual ?? 0), anterior: Number(f.anterior ?? 0) },
+        sin_reportes: f.estado === "activo" && (!f.ultimo_latido || horasEntre(new Date(f.ultimo_latido), ahora()) >= HORAS_SIN_REPORTES),
+        pausas: f.estado === "activo" ? { semana: actual, actual: Number(f.actual ?? 0), anterior: Number(f.anterior ?? 0) } : null,
+        cadena: txCadena(f),
       })),
     });
   });
 
   app.get("/v1/adultos/avisos", requiereDb, autenticaAdulto, async (c) => {
-    const adulto = c.get("adulto");
     const avisos = await db().query(
       "select id, tipo, texto, creado, enviado_por from avisos where adulto_id = $1 order by creado desc limit 100",
-      [adulto.id],
+      [c.get("adulto").id],
     );
     return c.json({ avisos });
   });
@@ -190,31 +360,19 @@ export function crearApp(deps: Deps): App {
     return c.json({ ok: true });
   });
 
-  app.delete("/v1/vinculos/:id", requiereDb, autenticaAdulto, async (c) => {
-    const adulto = c.get("adulto");
-    const [v] = await db().query<{ id: string; estado: string }>(
-      "select id, estado from vinculos where id = $1 and adulto_id = $2",
-      [c.req.param("id"), adulto.id],
-    );
-    if (!v) return c.json({ error: "no_encontrado" }, 404);
-    if (v.estado === "revocado") return c.json({ error: "ya_revocado" }, 409);
-    await db().query("update vinculos set estado = 'revocado', revocado_por = 'adulto', revocado = $2 where id = $1", [v.id, ahora()]);
-    await anotar(db(), claveRegistro, {
-      sujeto_tipo: "adulto", sujeto_id: adulto.id, accion: "revocado", version: versionVigente("adulto"),
-      texto_hash: sha256(CONSENTIMIENTOS.adulto[versionVigente("adulto")]), contexto: `vinculo:${v.id}`, ts: ahora(),
-    });
-    return c.json({ ok: true });
-  });
-
   // ---------- Dispositivo del adolescente ----------
 
+  /** Canjea el código. El vínculo queda esperando que el adulto lo firme en Stellar. */
   app.post("/v1/dispositivos/vincular", requiereDb, async (c) => {
-    const body = z.object({
-      codigo: z.string().regex(/^\d{6}$/),
-      alias: z.string().trim().min(1).max(40),
-      asentimiento: consentimientoSchema,
-      version_app: z.string().max(40).optional(),
-    }).safeParse(await c.req.json());
+    const body = z
+      .object({
+        codigo: z.string().regex(/^\d{6}$/),
+        alias: z.string().trim().min(1).max(40),
+        stellar: direccionSchema,
+        asentimiento: consentimientoSchema,
+        version_app: z.string().max(40).optional(),
+      })
+      .safeParse(await c.req.json());
     if (!body.success) return c.json({ error: "cuerpo_invalido", detalle: body.error.issues }, 400);
     const problema = validarConsentimiento("adolescente", body.data.asentimiento);
     if (problema) return c.json({ error: problema }, 400);
@@ -224,25 +382,40 @@ export function crearApp(deps: Deps): App {
       [body.data.codigo],
     );
     if (!cod || cod.usado || new Date(cod.expira) < ahora()) return c.json({ error: "codigo_invalido" }, 400);
+    const [adulto] = await db().query<{ alias: string; stellar: string }>("select alias, stellar from adultos where id = $1", [cod.adulto_id]);
+    if (adulto.stellar === body.data.stellar) return c.json({ error: "misma_cuenta" }, 400);
+    const [yaExiste] = await db().query("select 1 from dispositivos where stellar = $1", [body.data.stellar]);
+    if (yaExiste) return c.json({ error: "cuenta_ya_registrada" }, 409);
     await db().query("update codigos set usado = true where codigo = $1", [body.data.codigo]);
 
     const dispositivoId = id();
     const t = token();
     await db().query(
-      "insert into dispositivos (id, alias, token_hash, version_app, ultimo_latido, creado) values ($1, $2, $3, $4, $5, $5)",
-      [dispositivoId, body.data.alias, sha256(t), body.data.version_app ?? null, ahora()],
+      "insert into dispositivos (id, alias, stellar, token_hash, version_app, ultimo_latido, creado) values ($1, $2, $3, $4, $5, $6, $6)",
+      [dispositivoId, body.data.alias, body.data.stellar, sha256(t), body.data.version_app ?? null, ahora()],
     );
     const vinculoId = id();
-    await db().query(
-      "insert into vinculos (id, adulto_id, dispositivo_id, estado, creado) values ($1, $2, $3, 'activo', $4)",
-      [vinculoId, cod.adulto_id, dispositivoId, ahora()],
+    await db().query("insert into vinculos (id, adulto_id, dispositivo_id, estado, creado) values ($1, $2, $3, 'esperando_adulto', $4)", [
+      vinculoId, cod.adulto_id, dispositivoId, ahora(),
+    ]);
+    return c.json({ dispositivo_id: dispositivoId, vinculo_id: vinculoId, token: t, adulto: adulto.alias, estado: "esperando_adulto" }, 201);
+  });
+
+  app.get("/v1/dispositivos/yo", requiereDb, autenticaDispositivo, async (c) => {
+    const d = c.get("dispositivo");
+    const filas = await db().query<{
+      vinculo_id: string; estado: string; adulto: string;
+      tx_propuesta: string | null; tx_aceptacion: string | null; tx_revocacion: string | null;
+    }>(
+      `select v.id as vinculo_id, v.estado, a.alias as adulto, v.tx_propuesta, v.tx_aceptacion, v.tx_revocacion
+         from vinculos v join adultos a on a.id = v.adulto_id where v.dispositivo_id = $1 order by v.creado`,
+      [d.id],
     );
-    await anotar(db(), claveRegistro, {
-      sujeto_tipo: "adolescente", sujeto_id: dispositivoId, accion: "asentido", version: body.data.asentimiento.version,
-      texto_hash: body.data.asentimiento.texto_hash, contexto: `vinculo:${vinculoId}`, ts: ahora(),
+    return c.json({
+      alias: d.alias,
+      stellar: d.stellar,
+      vinculos: filas.map((f) => ({ vinculo_id: f.vinculo_id, estado: f.estado, adulto: f.adulto, cadena: txCadena(f) })),
     });
-    const [adulto] = await db().query<{ alias: string }>("select alias from adultos where id = $1", [cod.adulto_id]);
-    return c.json({ dispositivo_id: dispositivoId, vinculo_id: vinculoId, token: t, adulto: adulto.alias }, 201);
   });
 
   app.post("/v1/dispositivos/latido", requiereDb, autenticaDispositivo, async (c) => {
@@ -257,21 +430,28 @@ export function crearApp(deps: Deps): App {
 
   /**
    * El teléfono manda totales por semana ya deduplicados. Reenviar el mismo total es
-   * idempotente. Los eventos de protección llevan un id propio para no avisar dos veces.
+   * idempotente. Solo generan avisos los vínculos activos en la cadena.
    */
   app.post("/v1/dispositivos/eventos", requiereDb, autenticaDispositivo, async (c) => {
-    const body = z.object({
-      eventos: z.array(z.discriminatedUnion("tipo", [
-        z.object({ tipo: z.literal("pausas"), semana: z.string().regex(ES_SEMANA), cantidad: z.number().int().min(0).max(100_000) }),
-        z.object({ tipo: z.literal("proteccion_desactivada"), evento_id: z.string().min(1).max(80) }),
-        z.object({ tipo: z.literal("proteccion_activada"), evento_id: z.string().min(1).max(80) }),
-      ])).min(1).max(200),
-    }).safeParse(await c.req.json());
+    const body = z
+      .object({
+        eventos: z
+          .array(
+            z.discriminatedUnion("tipo", [
+              z.object({ tipo: z.literal("pausas"), semana: z.string().regex(ES_SEMANA), cantidad: z.number().int().min(0).max(100_000) }),
+              z.object({ tipo: z.literal("proteccion_desactivada"), evento_id: z.string().min(1).max(80) }),
+              z.object({ tipo: z.literal("proteccion_activada"), evento_id: z.string().min(1).max(80) }),
+            ]),
+          )
+          .min(1)
+          .max(200),
+      })
+      .safeParse(await c.req.json());
     if (!body.success) return c.json({ error: "cuerpo_invalido", detalle: body.error.issues }, 400);
 
     const dispositivo = c.get("dispositivo");
-    const adultos = await db().query<Vars["adulto"]>(
-      `select a.id, a.alias, a.push_token from adultos a join vinculos v on v.adulto_id = a.id
+    const adultos = await db().query<{ id: string; push_token: string | null }>(
+      `select a.id, a.push_token from adultos a join vinculos v on v.adulto_id = a.id
         where v.dispositivo_id = $1 and v.estado = 'activo'`,
       [dispositivo.id],
     );
@@ -298,30 +478,78 @@ export function crearApp(deps: Deps): App {
     return c.json({ ok: true, avisos });
   });
 
-  app.post("/v1/dispositivos/desvincular", requiereDb, autenticaDispositivo, async (c) => {
-    const dispositivo = c.get("dispositivo");
-    const vinculos = await db().query<{ id: string; adulto_id: string; alias: string; push_token: string | null }>(
-      `select v.id, a.id as adulto_id, a.alias, a.push_token from vinculos v join adultos a on a.id = v.adulto_id
-        where v.dispositivo_id = $1 and v.estado = 'activo'`,
-      [dispositivo.id],
-    );
-    if (vinculos.length === 0) return c.json({ error: "sin_vinculo_activo" }, 409);
-    for (const v of vinculos) {
-      await db().query("update vinculos set estado = 'revocado', revocado_por = 'adolescente', revocado = $2 where id = $1", [v.id, ahora()]);
-      await anotar(db(), claveRegistro, {
-        sujeto_tipo: "adolescente", sujeto_id: dispositivo.id, accion: "revocado", version: versionVigente("adolescente"),
-        texto_hash: sha256(CONSENTIMIENTOS.adolescente[versionVigente("adolescente")]), contexto: `vinculo:${v.id}`, ts: ahora(),
-      });
-      await avisar({ id: v.adulto_id, alias: v.alias, push_token: v.push_token }, "desvinculado", AVISOS.desvinculado(dispositivo.alias), `desvinculado:${v.id}`);
+  // ---------- Vínculo en Stellar ----------
+
+  const accionSchema = z.object({ accion: z.enum(["propose", "accept", "revoke"]) });
+
+  /** Devuelve las entradas de autorización que quien llama tiene que firmar con su passkey. */
+  app.post("/v1/vinculos/:id/cadena/preparar", requiereDb, requiereCadena, autenticaCualquiera, async (c) => {
+    const body = accionSchema.safeParse(await c.req.json());
+    if (!body.success) return c.json({ error: "cuerpo_invalido" }, 400);
+    const r = await vinculoParaAccion(c, body.data.accion);
+    if ("error" in r) return r.error;
+    try {
+      const entradas = await cadena().preparar(body.data.accion, paramsDe(r.v, body.data.accion, r.rol));
+      return c.json({ accion: body.data.accion, contrato: cadena().contrato, entradas });
+    } catch (e) {
+      return errorDeCadena(c, e);
     }
-    return c.json({ ok: true });
+  });
+
+  /** Recibe las entradas firmadas, envía la transacción y alinea el estado con el contrato. */
+  app.post("/v1/vinculos/:id/cadena/enviar", requiereDb, requiereCadena, autenticaCualquiera, async (c) => {
+    const body = accionSchema.extend({ entradas: z.array(z.string().max(20_000)).min(1).max(4) }).safeParse(await c.req.json());
+    if (!body.success) return c.json({ error: "cuerpo_invalido" }, 400);
+    const r = await vinculoParaAccion(c, body.data.accion);
+    if ("error" in r) return r.error;
+    const { v, rol } = r;
+    const accion = body.data.accion;
+    const p = paramsDe(v, accion, rol);
+
+    let hash: string;
+    let estadoCadena: EstadoCadena | null;
+    try {
+      hash = await cadena().enviar(accion, p, body.data.entradas);
+      estadoCadena = await cadena().leer(p.parent, p.child);
+    } catch (e) {
+      return errorDeCadena(c, e);
+    }
+    await db().query(`update vinculos set ${COLUMNA_TX[accion]} = $2 where id = $1`, [v.id, hash]);
+
+    const sujeto = rol === "adulto" ? ({ tipo: "adulto", id: v.adulto_id } as const) : ({ tipo: "adolescente", id: v.dispositivo_id } as const);
+    await anotar(db(), claveRegistro, {
+      sujeto_tipo: sujeto.tipo,
+      sujeto_id: sujeto.id,
+      accion: accion === "propose" ? "otorgado" : accion === "accept" ? "asentido" : "revocado",
+      version: versionVigente(sujeto.tipo),
+      texto_hash: sha256(CONSENTIMIENTOS[sujeto.tipo][versionVigente(sujeto.tipo)]),
+      contexto: `vinculo:${v.id};tx:${hash}`,
+      ts: ahora(),
+    });
+
+    const estado = await sincronizar(v, estadoCadena, accion === "revoke" ? rol : null);
+    return c.json({ ok: true, estado, tx: tx(hash) });
   });
 
   // ---------- Crons ----------
 
+  /** Diario: sincroniza vínculos con la cadena, avisa "sin reportes" y ancla el registro. */
   app.get("/api/cron/latidos", requiereDb, autenticaCron, async (c) => {
-    const filas = await db().query<Vars["adulto"] & { dispositivo_id: string; alias_dispositivo: string; ultimo_latido: string | null }>(
-      `select a.id, a.alias, a.push_token, d.id as dispositivo_id, d.alias as alias_dispositivo, d.ultimo_latido
+    let sincronizados = 0;
+    if (deps.cadena) {
+      const abiertos = await db().query<{ id: string }>("select id from vinculos where estado in ('propuesto', 'activo')");
+      for (const { id: vid } of abiertos) {
+        const v = await leerVinculo(vid);
+        try {
+          if ((await sincronizar(v, await cadena().leer(v.adulto_stellar, v.disp_stellar), null)) !== v.estado) sincronizados++;
+        } catch (e) {
+          if (!(e instanceof ErrorCadena)) throw e;
+        }
+      }
+    }
+
+    const filas = await db().query<{ id: string; push_token: string | null; dispositivo_id: string; alias_dispositivo: string; ultimo_latido: string | null }>(
+      `select a.id, a.push_token, d.id as dispositivo_id, d.alias as alias_dispositivo, d.ultimo_latido
          from vinculos v join adultos a on a.id = v.adulto_id join dispositivos d on d.id = v.dispositivo_id
         where v.estado = 'activo'`,
     );
@@ -333,15 +561,30 @@ export function crearApp(deps: Deps): App {
       const clave = `sin_reportes:${f.dispositivo_id}:${f.ultimo_latido ?? "nunca"}`;
       if (await avisar(f, "sin_reportes", AVISOS.sinReportes(f.alias_dispositivo, Number.isFinite(horas) ? horas : HORAS_SIN_REPORTES), clave)) avisos++;
     }
-    return c.json({ ok: true, revisados: filas.length, avisos });
+
+    let anclaje: ReturnType<typeof tx> = null;
+    if (deps.cadena) {
+      const [ultima] = await db().query<{ hash: string; n: string }>("select hash, n from registro_consentimientos order by n desc limit 1");
+      const [previo] = await db().query<{ hash_registro: string }>("select hash_registro from anclajes order by id desc limit 1");
+      if (ultima && ultima.hash !== previo?.hash_registro) {
+        try {
+          const h = await cadena().anclar(ultima.hash);
+          await db().query("insert into anclajes (hash_registro, filas, tx, creado) values ($1, $2, $3, $4)", [ultima.hash, Number(ultima.n), h, ahora()]);
+          anclaje = tx(h);
+        } catch (e) {
+          if (!(e instanceof ErrorCadena)) throw e;
+        }
+      }
+    }
+    return c.json({ ok: true, revisados: filas.length, avisos, sincronizados, anclaje });
   });
 
   app.get("/api/cron/resumen", requiereDb, autenticaCron, async (c) => {
     // Corre el lunes: resume la semana que terminó y la compara con la previa.
     const cerrada = semanaAnterior(ahora());
     const previa = semanaAnterior(new Date(ahora().getTime() - 7 * 86_400_000));
-    const filas = await db().query<Vars["adulto"] & { dispositivo_id: string; alias_dispositivo: string; actual: number | null; anterior: number | null }>(
-      `select a.id, a.alias, a.push_token, d.id as dispositivo_id, d.alias as alias_dispositivo,
+    const filas = await db().query<{ id: string; push_token: string | null; dispositivo_id: string; alias_dispositivo: string; actual: number | null; anterior: number | null }>(
+      `select a.id, a.push_token, d.id as dispositivo_id, d.alias as alias_dispositivo,
               (select cantidad from pausas_semana p where p.dispositivo_id = d.id and p.semana = $1) as actual,
               (select cantidad from pausas_semana p where p.dispositivo_id = d.id and p.semana = $2) as anterior
          from vinculos v join adultos a on a.id = v.adulto_id join dispositivos d on d.id = v.dispositivo_id
@@ -357,6 +600,17 @@ export function crearApp(deps: Deps): App {
   });
 
   // ---------- Auditoría ----------
+
+  /** Público: cada anclaje del registro de consentimientos en Stellar. */
+  app.get("/v1/auditoria/anclajes", requiereDb, async (c) => {
+    const filas = await db().query<{ hash_registro: string; filas: number; tx: string; creado: string }>(
+      "select hash_registro, filas, tx, creado from anclajes order by id desc limit 60",
+    );
+    return c.json({
+      red: deps.cadena?.red ?? null,
+      anclajes: filas.map((f) => ({ ...f, filas: Number(f.filas), url: deps.cadena?.explorador(f.tx) ?? null })),
+    });
+  });
 
   app.get("/v1/auditoria/verificar", requiereDb, async (c) => {
     if (!deps.adminToken || bearer(c) !== deps.adminToken) return c.json({ error: "no_autorizado" }, 401);
