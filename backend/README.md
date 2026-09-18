@@ -43,9 +43,18 @@ Límite conocido: dos altas al mismo tiempo pueden competir por el mismo `hash_p
 
 ## Desplegar en Vercel
 
-1. Crear el proyecto y conectar Neon: `vercel link` y `vercel integration add neon --plan free`. Eso define `DATABASE_URL`.
+Proyecto: `orbita-backend` en el equipo NOAPAY, preset **Hono**. La entrada es `src/index.ts`, que tiene que importar `hono` y exportar la app por defecto.
+
+Dos reglas que rompieron los primeros despliegues:
+- Vercel compila cada `.ts` sin bundler, así que los imports relativos llevan `.js` (`./rutas.js`). `tsconfig` usa `NodeNext` para que el typecheck lo exija.
+- `@types/node` y `typescript` tienen que estar en `devDependencies`.
+
+Pasos pendientes:
+1. Conectar Neon: `vercel link` y `vercel integration add neon --plan free`, o desde el panel (Storage). Eso define `DATABASE_URL`.
 2. Aplicar el esquema: `DATABASE_URL=... pnpm migrar`.
 3. Variables en el proyecto: `REGISTRO_CLAVE`, `CRON_SECRET`, `ADMIN_TOKEN` (ver `.env.example`). `FCM_SERVICE_ACCOUNT` cuando exista Firebase.
-4. `vercel deploy` o el despliegue desde el panel.
+4. Redesplegar.
+
+Las URLs de preview tienen la protección de Vercel activa (piden login). Para que la app Android pueda llegar hay que usar el dominio de producción o una clave de bypass de protección.
 
 Los crons están en `vercel.json`. En plan hobby corren como máximo una vez por día, con horario aproximado.
