@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import type { Context, MiddlewareHandler } from "hono";
 import { z } from "zod";
-import type { Db } from "./db/index";
-import type { Push } from "./push";
-import { anotar, verificar } from "./registro";
-import { AVISOS, CONSENTIMIENTOS, NOTA_NO_DIAGNOSTICO, versionVigente } from "./textos";
-import { ES_SEMANA, codigoDeSeisDigitos, horasEntre, id, semanaAnterior, semanaIso, sha256, token } from "./utiles";
-import { AYUDA as ayuda } from "./datos/ayuda";
+import type { Db } from "./db/index.js";
+import type { Push } from "./push.js";
+import { anotar, verificar } from "./registro.js";
+import { AVISOS, CONSENTIMIENTOS, NOTA_NO_DIAGNOSTICO, versionVigente } from "./textos.js";
+import { ES_SEMANA, codigoDeSeisDigitos, horasEntre, id, semanaAnterior, semanaIso, sha256, token } from "./utiles.js";
+import { AYUDA as ayuda } from "./datos/ayuda.js";
 
 export interface Deps {
   db: Db | null;

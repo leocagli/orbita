@@ -1,9 +1,9 @@
 // Entrada para Vercel (preset Hono). El preset exige que este archivo importe hono,
 // así que la app configurada se monta sobre una instancia propia.
 import { Hono } from "hono";
-import { crearApp } from "./rutas";
-import { crearDbNeon } from "./db/index";
-import { crearPush } from "./push";
+import { crearApp } from "./rutas.js";
+import { crearDbNeon } from "./db/index.js";
+import { crearPush } from "./push.js";
 
 const app = new Hono();
 

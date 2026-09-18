@@ -1,10 +1,10 @@
 // Servidor local para probar sin Vercel: `pnpm dev`.
 // Sin DATABASE_URL usa PGlite en memoria, así que se puede correr sin Neon.
 import { serve } from "@hono/node-server";
-import { crearApp } from "./rutas";
-import { crearDbNeon } from "./db/index";
-import { crearDbPglite } from "./db/pglite";
-import { crearPush } from "./push";
+import { crearApp } from "./rutas.js";
+import { crearDbNeon } from "./db/index.js";
+import { crearDbPglite } from "./db/pglite.js";
+import { crearPush } from "./push.js";
 
 const db = process.env.DATABASE_URL
   ? crearDbNeon(process.env.DATABASE_URL)

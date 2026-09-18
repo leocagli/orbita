@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { crearApp, HORAS_SIN_REPORTES } from "../src/rutas";
-import type { Db } from "../src/db/index";
-import { crearDbPglite } from "../src/db/pglite";
-import type { Aviso, Push } from "../src/push";
-import { CONSENTIMIENTOS } from "../src/textos";
-import { semanaAnterior, semanaIso, sha256 } from "../src/utiles";
+import { crearApp, HORAS_SIN_REPORTES } from "../src/rutas.js";
+import type { Db } from "../src/db/index.js";
+import { crearDbPglite } from "../src/db/pglite.js";
+import type { Aviso, Push } from "../src/push.js";
+import { CONSENTIMIENTOS } from "../src/textos.js";
+import { semanaAnterior, semanaIso, sha256 } from "../src/utiles.js";
 
 const CLAVE = "clave-de-test";
 const CRON = "cron-de-test";

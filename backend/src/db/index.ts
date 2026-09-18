@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { ESQUEMA } from "./esquema";
+import { ESQUEMA } from "./esquema.js";
 
 /** Mínimo común entre Neon (producción) y PGlite (tests y desarrollo). */
 export interface Db {

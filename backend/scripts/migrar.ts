@@ -1,5 +1,5 @@
 // Aplica el esquema en Neon: `DATABASE_URL=... pnpm migrar`. Es idempotente.
-import { crearDbNeon, migrar } from "../src/db/index";
+import { crearDbNeon, migrar } from "../src/db/index.js";
 
 const url = process.env.DATABASE_URL;
 if (!url) {

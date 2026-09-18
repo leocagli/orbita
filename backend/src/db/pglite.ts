@@ -1,7 +1,7 @@
 // Postgres en memoria para tests y `pnpm dev`. No se despliega.
 import { PGlite } from "@electric-sql/pglite";
-import type { Db } from "./index";
-import { ESQUEMA } from "./esquema";
+import type { Db } from "./index.js";
+import { ESQUEMA } from "./esquema.js";
 
 export async function crearDbPglite(): Promise<Db> {
   const pg = new PGlite();

@@ -2,8 +2,8 @@
 // Es la prueba de qué texto se mostró (por su hash y versión), a quién y cuándo, y de
 // que nadie editó filas después. No reemplaza verificar la identidad del adulto.
 
-import type { Db } from "./db/index";
-import { hmac, sha256 } from "./utiles";
+import type { Db } from "./db/index.js";
+import { hmac, sha256 } from "./utiles.js";
 
 export type Accion = "otorgado" | "asentido" | "revocado";
 export type SujetoTipo = "adulto" | "adolescente";
