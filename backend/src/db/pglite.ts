@@ -1,10 +1,11 @@
-// Postgres en memoria para tests y `pnpm dev`. No se despliega.
+// Postgres embebido para tests y para correr local. No se despliega.
+// Sin `dir` queda en memoria; con `dir` persiste en disco.
 import { PGlite } from "@electric-sql/pglite";
 import type { Db } from "./index.js";
 import { ESQUEMA } from "./esquema.js";
 
-export async function crearDbPglite(): Promise<Db> {
-  const pg = new PGlite();
+export async function crearDbPglite(dir?: string): Promise<Db> {
+  const pg = new PGlite(dir);
   await pg.exec(ESQUEMA);
   return {
     async query<T>(texto: string, params: unknown[] = []) {

@@ -17,11 +17,13 @@ export interface Deps {
   push: Push;
   ahora: () => Date;
   claveRegistro: string;
+  /** Si está vacío, se aceptan solo los crons de Vercel (por su user-agent). */
   cronSecret: string;
-  adminToken: string;
-  /** Orígenes web permitidos (CORS). */
+  /** Orígenes web permitidos (CORS), además de los despliegues de orbita-web en Vercel. */
   origenes: string[];
 }
+
+const WEB_EN_VERCEL = /^https:\/\/orbita-web(-[a-z0-9-]+)?\.vercel\.app$/;
 
 /** Sin latido durante este tiempo, el adulto recibe "sin reportes". */
 export const HORAS_SIN_REPORTES = 48;
@@ -59,7 +61,7 @@ export function crearApp(deps: Deps): App {
   app.use(
     "*",
     cors({
-      origin: deps.origenes,
+      origin: (origen) => (deps.origenes.includes(origen) || WEB_EN_VERCEL.test(origen) ? origen : null),
       allowHeaders: ["authorization", "content-type", "x-client-name", "x-client-version"],
       allowMethods: ["GET", "POST", "OPTIONS"],
     }),
@@ -122,8 +124,14 @@ export function crearApp(deps: Deps): App {
     return c.json({ error: "token_invalido" }, 401);
   };
 
+  /**
+   * Con CRON_SECRET, Vercel lo manda como Bearer. Sin él, se aceptan los pedidos del
+   * scheduler de Vercel: los crons son idempotentes (avisos deduplicados, anclaje solo
+   * si el registro cambió), así que un pedido falso no puede hacer daño.
+   */
   const autenticaCron: MiddlewareHandler = async (c, next) => {
-    if (!deps.cronSecret || bearer(c) !== deps.cronSecret) return c.json({ error: "no_autorizado" }, 401);
+    const ok = deps.cronSecret ? bearer(c) === deps.cronSecret : (c.req.header("user-agent") ?? "").startsWith("vercel-cron/");
+    if (!ok) return c.json({ error: "no_autorizado" }, 401);
     await next();
   };
 
@@ -568,7 +576,7 @@ export function crearApp(deps: Deps): App {
       const [previo] = await db().query<{ hash_registro: string }>("select hash_registro from anclajes order by id desc limit 1");
       if (ultima && ultima.hash !== previo?.hash_registro) {
         try {
-          const h = await cadena().anclar(ultima.hash);
+          const h = await cadena().anclar(ultima.hash, Number(ultima.n));
           await db().query("insert into anclajes (hash_registro, filas, tx, creado) values ($1, $2, $3, $4)", [ultima.hash, Number(ultima.n), h, ahora()]);
           anclaje = tx(h);
         } catch (e) {
@@ -612,10 +620,8 @@ export function crearApp(deps: Deps): App {
     });
   });
 
-  app.get("/v1/auditoria/verificar", requiereDb, async (c) => {
-    if (!deps.adminToken || bearer(c) !== deps.adminToken) return c.json({ error: "no_autorizado" }, 401);
-    return c.json(await verificar(db(), claveRegistro));
-  });
+  /** Público: recorre la cadena del registro y dice si está íntegra. No expone filas. */
+  app.get("/v1/auditoria/verificar", requiereDb, async (c) => c.json(await verificar(db(), claveRegistro)));
 
   app.notFound((c) => c.json({ error: "no_encontrado" }, 404));
   app.onError((err, c) => {

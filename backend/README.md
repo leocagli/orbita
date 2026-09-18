@@ -1,60 +1,59 @@
 # Backend de Órbita
 
-API mínima para Órbita (adolescente) y Órbita Familia (adulto): consentimientos, emparejamiento por código, conteos de pausas por semana, latidos, avisos al adulto y directorio de ayuda. Corre en Vercel Functions con Hono y Neon Postgres.
+API de Órbita (adolescente) y Órbita Familia (adulto): consentimientos, emparejamiento por código, vínculo firmado en Stellar, conteos de pausas por semana, latidos, avisos al adulto, anclaje del registro y directorio de ayuda. Corre en Vercel Functions con Hono y Neon Postgres.
 
 **Lo que nunca recibe el servidor:** dominios visitados, horarios exactos, nombres reales. El teléfono deduplica y manda totales por semana; el adulto ve tendencias.
+
+## Stellar (testnet)
+
+- **Cuentas:** cada persona tiene una cuenta inteligente de OpenZeppelin con passkey, creada con `smart-account-kit` desde la web.
+- **Vínculo:** vive en `family-registry`. El adulto firma `propose` y el adolescente `accept`, cada uno con su passkey. El backend arma la invocación, valida que las firmas sean sobre esa invocación exacta y la envía. No puede firmar por nadie.
+- **Avisos:** solo salen con el vínculo `Active` en la cadena. El cron diario detecta revocaciones hechas fuera de la app.
+- **Anclaje:** el cron diario publica el último hash del registro de consentimientos con el contrato `anclas`.
+- **Comisiones:** por defecto las paga el relayer público de testnet (SDF + OpenZeppelin Channels), así que el backend no necesita ninguna clave de Stellar. Con `SPONSOR_SECRET` las paga una cuenta propia.
 
 ## Correr local
 
 ```sh
 pnpm install
-pnpm test        # PGlite en memoria, sin servidor de base
-pnpm dev         # http://localhost:3000, con PGlite si no hay DATABASE_URL
+pnpm test                               # PGlite en memoria, cadena simulada
+pnpm dev                                # :3000, PGlite y testnet real vía relayer
+pnpm exec tsx scripts/probar-cadena.ts  # recorrido real en testnet sin passkeys
 ```
+
+Desde la raíz, `./correr-local.sh` levanta la API en :3310 y la web en :5310.
 
 ## Rutas
 
 | Método y ruta | Quién | Qué hace |
 |---|---|---|
 | `GET /v1/salud` | público | estado |
-| `GET /v1/consentimientos/:tipo` | público | texto vigente y su hash (`adulto` o `adolescente`) |
-| `GET /v1/ayuda?provincia=` | público | directorio de ayuda con fecha de verificación |
-| `POST /v1/adultos` | público | alta del adulto con su consentimiento; devuelve token |
+| `GET /v1/stellar/config` | público | red, contratos y verificador WebAuthn para la web |
+| `POST /v1/stellar/relayer` | público | despliegue de cuentas con passkey (protocolo del kit; solo el WASM aceptado) |
+| `GET /v1/consentimientos/:tipo` | público | texto vigente y su hash |
+| `GET /v1/ayuda?provincia=` | público | directorio de ayuda |
+| `POST /v1/adultos` | público | alta del adulto con su consentimiento y su cuenta Stellar |
 | `POST /v1/vinculos/codigo` | adulto | código de 6 dígitos válido 10 minutos |
-| `GET /v1/adultos/yo` | adulto | vínculos, estado de protección, tendencia semanal |
+| `GET /v1/adultos/yo` | adulto | vínculos, transacciones, tendencia semanal |
 | `GET /v1/adultos/avisos` | adulto | historial de avisos |
-| `POST /v1/adultos/push-token` | adulto | registra el token de FCM |
-| `DELETE /v1/vinculos/:id` | adulto | revoca el vínculo |
-| `POST /v1/dispositivos/vincular` | público | canjea el código con el asentimiento del adolescente; devuelve token |
-| `POST /v1/dispositivos/latido` | dispositivo | latido con estado de protección |
-| `POST /v1/dispositivos/eventos` | dispositivo | totales de pausas por semana y eventos de protección |
-| `POST /v1/dispositivos/desvincular` | dispositivo | el adolescente revoca; se avisa al adulto |
-| `GET /api/cron/latidos` | cron | avisa "sin reportes" pasadas 48 h sin latido, una vez por episodio |
-| `GET /api/cron/resumen` | cron (lunes) | resumen semanal de pausas |
-| `GET /v1/auditoria/verificar` | admin | verifica la cadena del registro de consentimientos |
-
-Los tokens van en `Authorization: Bearer ...` y se guardan hasheados.
-
-## Registro de consentimientos
-
-Tabla de solo agregado. Cada fila guarda tipo de sujeto, acción (otorgado, asentido, revocado), versión y hash del texto mostrado, fecha, el hash de la fila anterior, su propio hash y una firma HMAC con `REGISTRO_CLAVE`. `GET /v1/auditoria/verificar` recorre la cadena.
-
-Límite conocido: dos altas al mismo tiempo pueden competir por el mismo `hash_previo`; con el volumen inicial no importa, y se resuelve con una transacción cuando haga falta.
+| `POST /v1/dispositivos/vincular` | público | el adolescente canjea el código; el vínculo espera la firma del adulto |
+| `GET /v1/dispositivos/yo` | dispositivo | estado del vínculo |
+| `POST /v1/vinculos/:id/cadena/preparar` | adulto o dispositivo | entradas de autorización a firmar (`propose`, `accept` o `revoke`) |
+| `POST /v1/vinculos/:id/cadena/enviar` | adulto o dispositivo | envía las entradas firmadas y sincroniza el estado |
+| `POST /v1/dispositivos/latido` | dispositivo | latido |
+| `POST /v1/dispositivos/eventos` | dispositivo | totales de pausas y eventos de protección |
+| `GET /api/cron/latidos` | cron diario | sincroniza con la cadena, avisa "sin reportes", ancla el registro |
+| `GET /api/cron/resumen` | cron de los lunes | resumen semanal |
+| `GET /v1/auditoria/anclajes` | público | anclajes con enlace al explorador |
+| `GET /v1/auditoria/verificar` | público | recorre la cadena del registro y dice si está íntegra |
 
 ## Desplegar en Vercel
 
-Proyecto: `orbita-backend` en el equipo NOAPAY, preset **Hono**. La entrada es `src/index.ts`, que tiene que importar `hono` y exportar la app por defecto.
+Preset **Hono**, raíz `backend/`, entrada `src/index.ts`. **Única variable necesaria:** `DATABASE_URL`, que la agrega la integración de Neon (Storage, Neon, Connect). El esquema se aplica solo al arrancar.
 
-Dos reglas que rompieron los primeros despliegues:
-- Vercel compila cada `.ts` sin bundler, así que los imports relativos llevan `.js` (`./rutas.js`). `tsconfig` usa `NodeNext` para que el typecheck lo exija.
-- `@types/node` y `typescript` tienen que estar en `devDependencies`.
+Opcionales: `SPONSOR_SECRET` (pagar comisiones con cuenta propia), `CRON_SECRET` (sin ella se aceptan solo los pedidos del scheduler de Vercel), `REGISTRO_CLAVE` (sin ella se deriva de `DATABASE_URL`), `FCM_SERVICE_ACCOUNT` (push), `ORIGENES_WEB` (CORS extra; los dominios `orbita-web*.vercel.app` ya están permitidos).
 
-Pasos pendientes:
-1. Conectar Neon: `vercel link` y `vercel integration add neon --plan free`, o desde el panel (Storage). Eso define `DATABASE_URL`.
-2. Aplicar el esquema: `DATABASE_URL=... pnpm migrar`.
-3. Variables en el proyecto: `REGISTRO_CLAVE`, `CRON_SECRET`, `ADMIN_TOKEN` (ver `.env.example`). `FCM_SERVICE_ACCOUNT` cuando exista Firebase.
-4. Redesplegar.
-
-Las URLs de preview tienen la protección de Vercel activa (piden login). Para que la app Android pueda llegar hay que usar el dominio de producción o una clave de bypass de protección.
-
-Los crons están en `vercel.json`. En plan hobby corren como máximo una vez por día, con horario aproximado.
+Reglas que rompieron despliegues anteriores:
+- Vercel compila cada `.ts` sin bundler: los imports relativos llevan `.js` y `tsconfig` usa `NodeNext`.
+- `@types/node` y `typescript` van en `devDependencies`.
+- La entrada tiene que importar `hono` directamente.

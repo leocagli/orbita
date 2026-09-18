@@ -10,7 +10,6 @@ import { semanaAnterior, semanaIso, sha256 } from "../src/utiles.js";
 
 const CLAVE = "clave-de-test";
 const CRON = "cron-de-test";
-const ADMIN = "admin-de-test";
 
 /** Imita family-registry: mismas transiciones y mismas reglas de quién firma. */
 class CadenaFalsa implements Cadena {
@@ -44,8 +43,8 @@ class CadenaFalsa implements Cadena {
   async leer(parent: string, child: string) {
     return this.estados.get(`${parent}|${child}`) ?? null;
   }
-  async anclar(hash: string) {
-    this.anclados.push(hash);
+  async anclar(hash: string, filas: number) {
+    this.anclados.push(`${hash}:${filas}`);
     return `tx-ancla-${++this.n}`;
   }
 }
@@ -67,7 +66,7 @@ const pushEspia: Push = {
 
 const deps = () => ({
   db, cadena, configCadena: { red: "testnet" }, push: pushEspia, ahora: () => reloj,
-  claveRegistro: CLAVE, cronSecret: CRON, adminToken: ADMIN, origenes: ["http://localhost:5173"],
+  claveRegistro: CLAVE, cronSecret: CRON, origenes: ["http://localhost:5173"],
 });
 
 beforeEach(async () => {
@@ -311,7 +310,7 @@ describe("registro y anclaje", () => {
     const r1 = await llamar("GET", "/api/cron/latidos", undefined, CRON);
     expect(r1.json.anclaje.hash).toMatch(/^tx-ancla/);
     const [ultima] = await db.query<{ hash: string }>("select hash from registro_consentimientos order by n desc limit 1");
-    expect(cadena.anclados).toEqual([ultima.hash]);
+    expect(cadena.anclados).toEqual([`${ultima.hash}:3`]);
     expect((await llamar("GET", "/api/cron/latidos", undefined, CRON)).json.anclaje).toBeNull();
 
     const pub = await llamar("GET", "/v1/auditoria/anclajes");
@@ -319,12 +318,18 @@ describe("registro y anclaje", () => {
     expect(pub.json.anclajes[0]).toMatchObject({ hash_registro: ultima.hash, filas: 3, url: expect.stringContaining("tx-ancla") });
   });
 
-  it("la cadena del registro verifica y detecta una fila editada", async () => {
+  it("la cadena del registro verifica en público y detecta una fila editada", async () => {
     await familia();
-    expect((await llamar("GET", "/v1/auditoria/verificar", undefined, "otro")).status).toBe(401);
-    expect((await llamar("GET", "/v1/auditoria/verificar", undefined, ADMIN)).json).toEqual({ filas: 3, rota: null });
+    expect((await llamar("GET", "/v1/auditoria/verificar")).json).toEqual({ filas: 3, rota: null });
     await db.query("update registro_consentimientos set version = 9 where n = 2");
-    expect((await llamar("GET", "/v1/auditoria/verificar", undefined, ADMIN)).json).toEqual({ filas: 3, rota: 2 });
+    expect((await llamar("GET", "/v1/auditoria/verificar")).json).toEqual({ filas: 3, rota: 2 });
+  });
+
+  it("sin CRON_SECRET solo acepta el scheduler de Vercel", async () => {
+    app = crearApp({ ...deps(), cronSecret: "" });
+    expect((await app.request("/api/cron/latidos")).status).toBe(401);
+    expect((await app.request("/api/cron/latidos", { headers: { "user-agent": "curl/8" } })).status).toBe(401);
+    expect((await app.request("/api/cron/latidos", { headers: { "user-agent": "vercel-cron/1.0" } })).status).toBe(200);
   });
 });
 
@@ -348,8 +353,12 @@ describe("público", () => {
   it("CORS permite solo la web configurada", async () => {
     const ok = await app.request("/v1/salud", { headers: { origin: "http://localhost:5173" } });
     expect(ok.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
-    const otro = await app.request("/v1/salud", { headers: { origin: "https://malo.example" } });
-    expect(otro.headers.get("access-control-allow-origin")).toBeNull();
+    const vercel = await app.request("/v1/salud", { headers: { origin: "https://orbita-web-noapay1.vercel.app" } });
+    expect(vercel.headers.get("access-control-allow-origin")).toBe("https://orbita-web-noapay1.vercel.app");
+    for (const origin of ["https://malo.example", "https://orbita-web.vercel.app.malo.example", "https://otra-orbita-web.vercel.app"]) {
+      const r = await app.request("/v1/salud", { headers: { origin } });
+      expect(r.headers.get("access-control-allow-origin")).toBeNull();
+    }
   });
 });
 

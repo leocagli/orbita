@@ -20,3 +20,18 @@ export async function migrar(db: Db) {
     await db.query(sentencia);
   }
 }
+
+/** Aplica el esquema (idempotente) antes de la primera consulta de cada instancia. */
+export function conMigracion(base: Db): Db {
+  let lista: Promise<void> | null = null;
+  return {
+    async query<T>(texto: string, params?: unknown[]) {
+      lista ??= migrar(base).catch((e) => {
+        lista = null;
+        throw e;
+      });
+      await lista;
+      return base.query<T>(texto, params);
+    },
+  };
+}

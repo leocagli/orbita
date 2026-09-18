@@ -1,4 +1,5 @@
-// Prueba en vivo contra testnet: `SPONSOR_SECRET=... pnpm exec tsx scripts/probar-cadena.ts`.
+// Prueba en vivo contra testnet: `pnpm exec tsx scripts/probar-cadena.ts`.
+// Sin SPONSOR_SECRET las comisiones las paga el relayer público; con él, nuestra cuenta.
 // Usa dos cuentas G nuevas (fondeadas con friendbot) como adulto y adolescente, firma sus
 // entradas de autorización localmente y recorre propose, accept, revoke y un anclaje.
 import { Keypair, authorizeEntry, rpc, xdr } from "@stellar/stellar-sdk";
@@ -7,7 +8,7 @@ import { CONSENTIMIENTOS } from "../src/textos.js";
 import { sha256 } from "../src/utiles.js";
 
 const cadena = cadenaDesdeEntorno(process.env);
-if (!cadena) throw new Error("Falta SPONSOR_SECRET");
+console.log("comisiones:", process.env.SPONSOR_SECRET ? "cuenta propia" : "relayer público");
 const servidor = new rpc.Server("https://soroban-testnet.stellar.org");
 const PASS = "Test SDF Network ; September 2015";
 
@@ -64,6 +65,6 @@ const pRev = { ...base, firmante: adolescente.publicKey() };
 const hRev = await cadena.enviar("revoke", pRev, await firmar(await cadena.preparar("revoke", pRev), adolescente));
 console.log("revoke", cadena.explorador(hRev), "->", await cadena.leer(base.parent, base.child));
 
-const hAnc = await cadena.anclar(sha256("prueba de anclaje de Órbita"));
+const hAnc = await cadena.anclar(sha256("prueba de anclaje de Órbita"), 1);
 console.log("anclaje", cadena.explorador(hAnc));
 console.log("CADENA OK");
