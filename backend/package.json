@@ -1,0 +1,30 @@
+{
+  "name": "orbita-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend de Órbita: consentimientos, emparejamiento, eventos agregados, latidos y avisos al adulto.",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "tsx watch src/local.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "migrar": "tsx scripts/migrar.ts"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.1",
+    "google-auth-library": "^10.2.0",
+    "hono": "^4.9.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.6",
+    "@hono/node-server": "^1.19.0",
+    "@types/node": "^22.17.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
