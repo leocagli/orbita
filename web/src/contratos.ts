@@ -16,4 +16,4 @@ export const VERIFICADOR_WEBAUTHN = "CC7EKIHQP3TN4CARQDND6CEOY2UXLWWC2X5GHTD5NLA
  * La passkey queda atada al dominio donde se crea. Solo se crean cuentas en el sitio
  * principal (y en local); en un preview de Vercel quedarían inservibles en producción.
  */
-export const DOMINIOS_DE_CUENTAS = ["localhost", "orbita-web.vercel.app", "orbita-web-noapay1.vercel.app"];
+export const DOMINIOS_DE_CUENTAS = ["localhost", "orbita-web.vercel.app"];

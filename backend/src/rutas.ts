@@ -23,7 +23,9 @@ export interface Deps {
   origenes: string[];
 }
 
-const WEB_EN_VERCEL = /^https:\/\/orbita-web(-[a-z0-9-]+)?\.vercel\.app$/;
+// Solo el dominio de producción. Los previews de Vercel llevan el nombre del equipo y
+// cualquiera puede crear uno parecido, así que se habilitan uno por uno con ORIGENES_WEB.
+const WEB_EN_VERCEL = /^https:\/\/orbita-web\.vercel\.app$/;
 
 /** Sin latido durante este tiempo, el adulto recibe "sin reportes". */
 export const HORAS_SIN_REPORTES = 48;
