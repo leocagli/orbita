@@ -1,0 +1,36 @@
+name: Mantener TTL en testnet
+
+# Cada lunes extiende el TTL de los contratos de Órbita y de la infraestructura de
+# passkeys, para que nada se archive. Usa una clave de testnet propia del repo.
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  extender:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Stellar CLI 28.0.0
+        run: |
+          curl -fsSL -o stellar.tgz https://github.com/stellar/stellar-cli/releases/download/v28.0.0/stellar-cli-28.0.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf stellar.tgz
+          sudo install -m 0755 "$(find . -type f -name stellar | head -1)" /usr/local/bin/stellar
+          stellar --version
+
+      - name: Cargar la clave de mantenimiento
+        env:
+          SECRETO: ${{ secrets.STELLAR_MANTENIMIENTO_SECRET }}
+        run: |
+          printf '%s\n' "$SECRETO" | stellar keys add orbita-mantenimiento --secret-key
+          # Testnet: si la cuenta se quedó sin saldo o hubo un reset, friendbot la repone.
+          curl -fsS "https://friendbot.stellar.org/?addr=$(stellar keys address orbita-mantenimiento)" >/dev/null || true
+
+      - name: Extender TTL
+        run: ./scripts/mantener-ttl.sh orbita-mantenimiento

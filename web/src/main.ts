@@ -1,6 +1,7 @@
 import "./estilos.css";
 import { api, ErrorApi, type Servicio, type TxCadena, type VinculoAdolescente, type VinculoAdulto } from "./api";
 import { crearCuenta, operarVinculo, reconectar, type Rol } from "./cuenta";
+import { FAMILY_REGISTRY } from "./contratos";
 
 // ---------- utilidades ----------
 
@@ -383,7 +384,7 @@ async function vistaAuditoria() {
   marco(`
     <h1>Registro público en Stellar</h1>
     <p class="suave">Cada consentimiento, aceptación y revocación queda en un registro encadenado. Una vez por día, Órbita publica en Stellar el último hash de ese registro. Así cualquiera puede comprobar que nadie lo editó después, sin ver ningún dato personal.</p>
-    <p class="suave chico">Además, cada vínculo vive en el contrato <a href="${explorar("contract", "CAMMCDEUJ5YQ5AHSYVO75GCQR7NTKH4CHINSXWGHMJQRLPJJ2BVWKHGJ")}" target="_blank" rel="noopener">family-registry ↗</a>, firmado por el adulto y por el adolescente.</p>
+    <p class="suave chico">Además, cada vínculo vive en el contrato <a href="${explorar("contract", FAMILY_REGISTRY)}" target="_blank" rel="noopener">family-registry ↗</a>, firmado por el adulto y por el adolescente.</p>
     <div class="tarjeta">${
       r.anclajes.length
         ? r.anclajes.map((a) => `<div class="aviso"><a href="${esc(a.url ?? explorar("tx", a.tx))}" target="_blank" rel="noopener">${corto(a.tx)} ↗</a> · ${a.filas} registros<time>${new Date(a.creado).toLocaleString("es-AR")} · hash ${corto(a.hash_registro)}</time></div>`).join("")

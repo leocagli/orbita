@@ -10,11 +10,13 @@ import { semanaAnterior, semanaIso, sha256 } from "../src/utiles.js";
 
 const CLAVE = "clave-de-test";
 const CRON = "cron-de-test";
+const RESERVADA = Keypair.random().publicKey();
 
 /** Imita family-registry: mismas transiciones y mismas reglas de quién firma. */
 class CadenaFalsa implements Cadena {
   red = "testnet";
   contrato = "CFALSO";
+  reservadas = [RESERVADA];
   estados = new Map<string, EstadoCadena>();
   anclados: string[] = [];
   n = 0;
@@ -212,6 +214,44 @@ describe("cuentas", () => {
     const { codigo } = (await llamar("POST", "/v1/vinculos/codigo", undefined, a.token)).json;
     const r = await llamar("POST", "/v1/dispositivos/vincular", { codigo, alias: "Juli", stellar: s, asentimiento: consentimiento("adolescente") });
     expect(r.json.error).toBe("misma_cuenta");
+  });
+
+  it("rechaza las direcciones reservadas del sistema", async () => {
+    const r = await llamar("POST", "/v1/adultos", { alias: "Mara", stellar: RESERVADA, consentimiento: consentimiento("adulto") });
+    expect(r.json.error).toBe("direccion_reservada");
+    const a = (await llamar("POST", "/v1/adultos", { alias: "Mara", stellar: direccion(), consentimiento: consentimiento("adulto") })).json;
+    const { codigo } = (await llamar("POST", "/v1/vinculos/codigo", undefined, a.token)).json;
+    const v = await llamar("POST", "/v1/dispositivos/vincular", { codigo, alias: "Juli", stellar: RESERVADA, asentimiento: consentimiento("adolescente") });
+    expect(v.json.error).toBe("direccion_reservada");
+  });
+
+  it("limita los intentos de canjear códigos por IP", async () => {
+    const intento = (ip: string) =>
+      app.request("/v1/dispositivos/vincular", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-real-ip": ip },
+        body: JSON.stringify({ codigo: "000000", alias: "X", stellar: direccion(), asentimiento: consentimiento("adolescente") }),
+      });
+    for (let i = 0; i < 10; i++) expect((await intento("1.1.1.1")).status).toBe(400);
+    const bloqueado = await intento("1.1.1.1");
+    expect(bloqueado.status).toBe(429);
+    expect(bloqueado.headers.get("retry-after")).toBe("600");
+    expect((await intento("2.2.2.2")).status).toBe(400); // otra IP no está afectada
+    avanzar(0.2); // 12 minutos: ventana nueva
+    expect((await intento("1.1.1.1")).status).toBe(400);
+  });
+
+  it("limita el despliegue de cuentas pagadas", async () => {
+    const pedir = () =>
+      app.request("/v1/stellar/relayer", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-real-ip": "3.3.3.3" },
+        body: JSON.stringify({ func: "AAAA", auth: [] }),
+      });
+    for (let i = 0; i < 10; i++) expect((await pedir()).status).toBe(200);
+    const r = await pedir();
+    expect(r.status).toBe(429);
+    expect(await r.json()).toMatchObject({ success: false, code: "RATE_LIMITED" });
   });
 
   it("paga el despliegue de cuentas con passkey", async () => {

@@ -6,11 +6,12 @@
   },
   "auth": [
     [],
+    [],
     []
   ],
   "ledger": {
     "protocol_version": 26,
-    "sequence_number": 1234,
+    "sequence_number": 0,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -32,10 +33,10 @@
               "val": {
                 "vec": [
                   {
-                    "bytes": "0707070707070707070707070707070707070707070707070707070707070707"
+                    "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
                   },
                   {
-                    "u32": 3
+                    "u32": 1
                   }
                 ]
               }
@@ -43,7 +44,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 1249
+        "live_until": 15
       },
       {
         "entry": {
@@ -66,7 +67,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 3111634
+        "live_until": 3110400
       },
       {
         "entry": {
@@ -80,42 +81,9 @@
           },
           "ext": "v0"
         },
-        "live_until": 3111634
+        "live_until": 3110400
       }
     ]
   },
-  "events": [
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "anclado"
-              },
-              {
-                "bytes": "0707070707070707070707070707070707070707070707070707070707070707"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "filas"
-                  },
-                  "val": {
-                    "u32": 3
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    }
-  ]
+  "events": []
 }

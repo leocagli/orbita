@@ -3,14 +3,22 @@
 //!
 //! `anclar` no pide firma: deja el hash en el historial de la red (argumentos de la
 //! transacción y un evento), que es permanente sin pagar alquiler. Así lo puede llamar un
-//! relayer que paga la comisión. Además guarda el último hash en almacenamiento temporal:
-//! los relayers no envían llamadas que no escriben nada, porque las toman por lecturas.
-//! Quién ancló cada hash lo dice la lista pública de Órbita (`/v1/auditoria/anclajes`),
-//! que apunta a cada transacción.
+//! relayer que paga la comisión.
+//!
+//! Como cualquiera puede llamarlo, un evento `Anclado` solo prueba que ese hash existía
+//! en ese momento. Qué anclajes son de Órbita lo dice su lista pública
+//! (`/v1/auditoria/anclajes`), que apunta a cada transacción.
+//!
+//! Además escribe el último hash en almacenamiento temporal: los relayers no envían
+//! llamadas que no escriben nada, porque las toman por lecturas. Ese valor dura poco y
+//! lo puede pisar cualquiera, por eso no se expone con un getter.
 
 use soroban_sdk::{contract, contractevent, contractimpl, symbol_short, BytesN, Env, Symbol};
 
 const ULTIMO: Symbol = symbol_short!("ultimo");
+const DAY_IN_LEDGERS: u32 = 17280;
+const INSTANCE_TTL_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
+const INSTANCE_EXTEND_AMOUNT: u32 = 180 * DAY_IN_LEDGERS;
 
 /// Se publicó el hash del registro con `filas` entradas.
 #[contractevent]
@@ -29,13 +37,11 @@ impl Anclas {
     /// Publica el hash y devuelve el número de ledger en que quedó.
     pub fn anclar(e: &Env, hash: BytesN<32>, filas: u32) -> u32 {
         e.storage().temporary().set(&ULTIMO, &(hash.clone(), filas));
+        e.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_EXTEND_AMOUNT);
         Anclado { hash, filas }.publish(e);
         e.ledger().sequence()
-    }
-
-    /// Último hash anclado, mientras siga en el almacenamiento temporal.
-    pub fn ultimo(e: &Env) -> Option<(BytesN<32>, u32)> {
-        e.storage().temporary().get(&ULTIMO)
     }
 }
 

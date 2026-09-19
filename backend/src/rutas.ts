@@ -129,6 +129,31 @@ export function crearApp(deps: Deps): App {
    * scheduler de Vercel: los crons son idempotentes (avisos deduplicados, anclaje solo
    * si el registro cambió), así que un pedido falso no puede hacer daño.
    */
+  /**
+   * Límite de pedidos por IP y ventana fija, guardado en la base (en Vercel cada instancia
+   * es efímera, así que un contador en memoria no serviría). Sin base no limita.
+   */
+  const limitar =
+    (nombre: string, maximo: number, segundos: number): MiddlewareHandler =>
+    async (c, next) => {
+      if (!deps.db) return next();
+      const ip = c.req.header("x-real-ip") ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "sin-ip";
+      const ventana = Math.floor(ahora().getTime() / 1000 / segundos);
+      const [fila] = await db().query<{ cuenta: number }>(
+        `insert into limites (clave, ventana, cuenta, actualizado) values ($1, $2, 1, $3)
+         on conflict (clave, ventana) do update set cuenta = limites.cuenta + 1, actualizado = excluded.actualizado
+         returning cuenta`,
+        [`${nombre}:${ip}`, ventana, ahora()],
+      );
+      if (Number(fila.cuenta) > maximo) {
+        c.header("retry-after", String(segundos));
+        return c.json({ error: "demasiados_pedidos", success: false, code: "RATE_LIMITED" }, 429);
+      }
+      await next();
+    };
+
+  const noReservada = (direccion: string) => !(deps.cadena?.reservadas ?? []).includes(direccion);
+
   const autenticaCron: MiddlewareHandler = async (c, next) => {
     const ok = deps.cronSecret ? bearer(c) === deps.cronSecret : (c.req.header("user-agent") ?? "").startsWith("vercel-cron/");
     if (!ok) return c.json({ error: "no_autorizado" }, 401);
@@ -256,7 +281,7 @@ export function crearApp(deps: Deps): App {
   });
 
   /** Paga el despliegue de una cuenta inteligente con passkey (solo el WASM aceptado). */
-  app.post("/v1/stellar/cuentas", requiereCadena, async (c) => {
+  app.post("/v1/stellar/cuentas", limitar("cuentas", 10, 3600), requiereCadena, async (c) => {
     const body = z.object({ func: z.string().min(1).max(20_000), auth: z.array(z.string().max(20_000)).max(4) }).safeParse(await c.req.json());
     if (!body.success) return c.json({ error: "cuerpo_invalido" }, 400);
     try {
@@ -271,7 +296,7 @@ export function crearApp(deps: Deps): App {
    * Mismo servicio con el protocolo de relayer de smart-account-kit, para que el kit
    * registre él mismo el despliegue de la cuenta. Solo acepta despliegues de cuentas.
    */
-  app.post("/v1/stellar/relayer", async (c) => {
+  app.post("/v1/stellar/relayer", limitar("cuentas", 10, 3600), async (c) => {
     if (!deps.cadena) return c.json({ success: false, error: "Falta SPONSOR_SECRET", code: "UNAUTHORIZED" }, 503);
     const body = z.object({ func: z.string().min(1).max(20_000), auth: z.array(z.string().max(20_000)).max(4) }).safeParse(await c.req.json());
     if (!body.success) return c.json({ success: false, error: "Parámetros inválidos", code: "INVALID_PARAMS" }, 400);
@@ -287,13 +312,14 @@ export function crearApp(deps: Deps): App {
 
   // ---------- Adulto ----------
 
-  app.post("/v1/adultos", requiereDb, async (c) => {
+  app.post("/v1/adultos", requiereDb, limitar("altas", 10, 3600), async (c) => {
     const body = z
       .object({ alias: z.string().trim().min(1).max(40), stellar: direccionSchema, consentimiento: consentimientoSchema })
       .safeParse(await c.req.json());
     if (!body.success) return c.json({ error: "cuerpo_invalido", detalle: body.error.issues }, 400);
     const problema = validarConsentimiento("adulto", body.data.consentimiento);
     if (problema) return c.json({ error: problema }, 400);
+    if (!noReservada(body.data.stellar)) return c.json({ error: "direccion_reservada" }, 400);
     const [yaExiste] = await db().query("select 1 from adultos where stellar = $1", [body.data.stellar]);
     if (yaExiste) return c.json({ error: "cuenta_ya_registrada" }, 409);
 
@@ -371,7 +397,8 @@ export function crearApp(deps: Deps): App {
   // ---------- Dispositivo del adolescente ----------
 
   /** Canjea el código. El vínculo queda esperando que el adulto lo firme en Stellar. */
-  app.post("/v1/dispositivos/vincular", requiereDb, async (c) => {
+  // 10 intentos cada 10 minutos por IP: adivinar un código de 6 dígitos deja de ser viable.
+  app.post("/v1/dispositivos/vincular", requiereDb, limitar("vincular", 10, 600), async (c) => {
     const body = z
       .object({
         codigo: z.string().regex(/^\d{6}$/),
@@ -392,6 +419,7 @@ export function crearApp(deps: Deps): App {
     if (!cod || cod.usado || new Date(cod.expira) < ahora()) return c.json({ error: "codigo_invalido" }, 400);
     const [adulto] = await db().query<{ alias: string; stellar: string }>("select alias, stellar from adultos where id = $1", [cod.adulto_id]);
     if (adulto.stellar === body.data.stellar) return c.json({ error: "misma_cuenta" }, 400);
+    if (!noReservada(body.data.stellar)) return c.json({ error: "direccion_reservada" }, 400);
     const [yaExiste] = await db().query("select 1 from dispositivos where stellar = $1", [body.data.stellar]);
     if (yaExiste) return c.json({ error: "cuenta_ya_registrada" }, 409);
     await db().query("update codigos set usado = true where codigo = $1", [body.data.codigo]);
@@ -584,6 +612,8 @@ export function crearApp(deps: Deps): App {
         }
       }
     }
+    // Los contadores de límites de más de un día ya no sirven.
+    await db().query("delete from limites where actualizado < $1", [new Date(ahora().getTime() - 86_400_000)]);
     return c.json({ ok: true, revisados: filas.length, avisos, sincronizados, anclaje });
   });
 

@@ -209,6 +209,31 @@ fn new_consent_needs_new_assent() {
 }
 
 #[test]
+fn writes_keep_the_link_and_instance_alive() {
+    use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+    let (e, client, parent, child) = setup();
+    e.mock_all_auths();
+    link_active(&e, &client, &parent, &child);
+
+    let (link_ttl, instance_ttl) = e.as_contract(&client.address, || {
+        (
+            e.storage()
+                .persistent()
+                .get_ttl(&DataKey::Link(parent.clone(), child.clone())),
+            e.storage().instance().get_ttl(),
+        )
+    });
+    assert!(
+        link_ttl >= LINK_TTL_THRESHOLD,
+        "ttl del vínculo: {link_ttl}"
+    );
+    assert!(
+        instance_ttl >= INSTANCE_TTL_THRESHOLD,
+        "ttl de instancia: {instance_ttl}"
+    );
+}
+
+#[test]
 fn relinking_after_revocation_needs_the_child_again() {
     let (e, client, parent, child) = setup();
     e.mock_all_auths();

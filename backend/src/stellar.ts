@@ -33,6 +33,8 @@ export interface ParamsVinculo {
 export interface Cadena {
   red: string;
   contrato: string;
+  /** Direcciones del sistema (fuente de simulación, sponsor): no pueden ser de usuarios. */
+  reservadas: string[];
   explorador(hash: string): string;
   /** Envía el despliegue de una cuenta inteligente ya autorizado por el deployer del kit. */
   crearCuenta(funcB64: string, authB64: string[]): Promise<string>;
@@ -146,6 +148,9 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
   return {
     red: cfg.red,
     contrato: cfg.contrato,
+    // Si un usuario usara una de estas, la simulación le daría credenciales de cuenta
+    // fuente en vez de una entrada de autorización para firmar.
+    reservadas: [cfg.fuenteLectura, ...(sponsor ? [sponsor.publicKey()] : [])],
     explorador: (hash) => `https://stellar.expert/explorer/${cfg.red}/tx/${hash}`,
 
     async crearCuenta(funcB64, authB64) {
@@ -207,8 +212,8 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
 const POR_DEFECTO = {
   rpc: "https://soroban-testnet.stellar.org",
   passphrase: "Test SDF Network ; September 2015",
-  familyRegistry: "CAMMCDEUJ5YQ5AHSYVO75GCQR7NTKH4CHINSXWGHMJQRLPJJ2BVWKHGJ",
-  anclas: "CBRHTPIHPCOVJVAVD64OIXDYNBKOPMEPAWSUTQDHID36QNCNNYZCMX33",
+  familyRegistry: "CAQDKJ62HKUQTURQAEGKHPAIC3DQK36A6QR4IHH2IYW4EI7EAVENFJ6M",
+  anclas: "CCGNGLJ5ZMNRIJB4GURJISTDEJYLIHOBNS2ZKF7TEGAVQ7DIINV4YVZN",
   // Relayer público de testnet que usa smart-account-kit (SDF + OpenZeppelin Channels).
   relayer: "https://smart-account-relayer-proxy.sdf-ecosystem.workers.dev",
   // Cuenta de testnet existente; solo se usa su dirección pública para simular.

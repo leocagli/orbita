@@ -81,7 +81,16 @@ create table if not exists registro_consentimientos (
   firma text not null
 );
 
--- Cada anclaje publica en Stellar el último hash del registro (MEMO_HASH).
+-- Límite de pedidos por clave (ruta + IP) y ventana de tiempo, para las rutas públicas.
+create table if not exists limites (
+  clave text not null,
+  ventana bigint not null,
+  cuenta integer not null default 0,
+  actualizado timestamptz not null default now(),
+  primary key (clave, ventana)
+);
+
+-- Cada anclaje publica en Stellar el último hash del registro (contrato anclas).
 create table if not exists anclajes (
   id bigserial primary key,
   hash_registro text not null,

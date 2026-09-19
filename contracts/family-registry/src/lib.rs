@@ -13,11 +13,14 @@ use soroban_sdk::{
     BytesN, Env,
 };
 
+// Ledgers de ~5 s. Se extiende solo cuando quedan menos de 30 días, hasta 180 días:
+// escrituras baratas y ningún vínculo en uso llega a archivarse. En mainnet el TTL
+// inicial ya es de ~120 días, así que el umbral recién actúa después del primer mes.
 const DAY_IN_LEDGERS: u32 = 17280;
-const LINK_EXTEND_AMOUNT: u32 = 90 * DAY_IN_LEDGERS;
-const LINK_TTL_THRESHOLD: u32 = LINK_EXTEND_AMOUNT - DAY_IN_LEDGERS;
-const INSTANCE_EXTEND_AMOUNT: u32 = 90 * DAY_IN_LEDGERS;
-const INSTANCE_TTL_THRESHOLD: u32 = INSTANCE_EXTEND_AMOUNT - DAY_IN_LEDGERS;
+const LINK_EXTEND_AMOUNT: u32 = 180 * DAY_IN_LEDGERS;
+const LINK_TTL_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
+const INSTANCE_EXTEND_AMOUNT: u32 = 180 * DAY_IN_LEDGERS;
+const INSTANCE_TTL_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
