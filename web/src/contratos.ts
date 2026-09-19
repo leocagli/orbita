@@ -13,7 +13,8 @@ export const CUENTA_WASM_HASH = "1b5f4534a76322da2ad7c745f6900857a6802b0ca79850c
 export const VERIFICADOR_WEBAUTHN = "CC7EKIHQP3TN4CARQDND6CEOY2UXLWWC2X5GHTD5NLAT7BG5GPZIOM3F";
 
 /**
- * La passkey queda atada al dominio donde se crea. Solo se crean cuentas en el sitio
- * principal (y en local); en un preview de Vercel quedarían inservibles en producción.
+ * La passkey queda atada al dominio donde se crea. Solo se crean cuentas en local y en
+ * el dominio de producción, que se fija al compilar con VITE_DOMINIO_WEB (sin https://).
+ * No hay un valor por defecto en vercel.app: esos nombres los puede tomar cualquiera.
  */
-export const DOMINIOS_DE_CUENTAS = ["localhost", "orbita-web.vercel.app"];
+export const DOMINIOS_DE_CUENTAS = ["localhost", ...(import.meta.env.VITE_DOMINIO_WEB ? [import.meta.env.VITE_DOMINIO_WEB as string] : [])];

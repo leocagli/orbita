@@ -19,13 +19,12 @@ export interface Deps {
   claveRegistro: string;
   /** Si está vacío, se aceptan solo los crons de Vercel (por su user-agent). */
   cronSecret: string;
-  /** Orígenes web permitidos (CORS), además de los despliegues de orbita-web en Vercel. */
+  /**
+   * Orígenes web permitidos (CORS), exactos. No hay dominios de Vercel por defecto:
+   * los nombres de *.vercel.app los puede tomar cualquiera.
+   */
   origenes: string[];
 }
-
-// Solo el dominio de producción. Los previews de Vercel llevan el nombre del equipo y
-// cualquiera puede crear uno parecido, así que se habilitan uno por uno con ORIGENES_WEB.
-const WEB_EN_VERCEL = /^https:\/\/orbita-web\.vercel\.app$/;
 
 /** Sin latido durante este tiempo, el adulto recibe "sin reportes". */
 export const HORAS_SIN_REPORTES = 48;
@@ -63,7 +62,7 @@ export function crearApp(deps: Deps): App {
   app.use(
     "*",
     cors({
-      origin: (origen) => (deps.origenes.includes(origen) || WEB_EN_VERCEL.test(origen) ? origen : null),
+      origin: (origen) => (deps.origenes.includes(origen) ? origen : null),
       allowHeaders: ["authorization", "content-type", "x-client-name", "x-client-version"],
       allowMethods: ["GET", "POST", "OPTIONS"],
     }),

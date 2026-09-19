@@ -393,9 +393,8 @@ describe("público", () => {
   it("CORS permite solo la web configurada", async () => {
     const ok = await app.request("/v1/salud", { headers: { origin: "http://localhost:5173" } });
     expect(ok.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
-    const vercel = await app.request("/v1/salud", { headers: { origin: "https://orbita-web.vercel.app" } });
-    expect(vercel.headers.get("access-control-allow-origin")).toBe("https://orbita-web.vercel.app");
-    for (const origin of ["https://malo.example", "https://orbita-web.vercel.app.malo.example", "https://otra-orbita-web.vercel.app", "https://orbita-web-otro-equipo.vercel.app"]) {
+    // orbita-web.vercel.app es de otra persona: no se acepta salvo que se configure.
+    for (const origin of ["https://malo.example", "https://orbita-web.vercel.app", "https://localhost:5173.malo.example", "https://orbita-web-otro-equipo.vercel.app"]) {
       const r = await app.request("/v1/salud", { headers: { origin } });
       expect(r.headers.get("access-control-allow-origin")).toBeNull();
     }

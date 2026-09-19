@@ -49,9 +49,15 @@ Desde la raíz, `./correr-local.sh` levanta la API en :3310 y la web en :5310.
 
 ## Desplegar en Vercel
 
-Preset **Hono**, raíz `backend/`, entrada `src/index.ts`. **Única variable necesaria:** `DATABASE_URL`, que la agrega la integración de Neon (Storage, Neon, Connect). El esquema se aplica solo al arrancar.
+Preset **Hono**, raíz `backend/`, entrada `src/index.ts`. El esquema se aplica solo al arrancar.
 
-Opcionales: `SPONSOR_SECRET` (pagar comisiones con cuenta propia), `CRON_SECRET` (sin ella se aceptan solo los pedidos del scheduler de Vercel), `REGISTRO_CLAVE` (sin ella se deriva de `DATABASE_URL`), `FCM_SERVICE_ACCOUNT` (push), `ORIGENES_WEB` (CORS extra; los dominios `orbita-web*.vercel.app` ya están permitidos).
+Variables necesarias:
+- `DATABASE_URL`: la agrega la integración de Neon (Storage, Neon, Connect).
+- `ORIGENES_WEB`: los orígenes exactos de la web, separados por coma (por ejemplo `https://orbita.cosmospay.lat`). No hay dominios de Vercel permitidos por defecto, porque los nombres de `*.vercel.app` los puede tomar cualquiera: `orbita-web.vercel.app` ya es de otra persona.
+
+En la web, compilar con `VITE_API_URL` (URL del backend) y `VITE_DOMINIO_WEB` (dominio donde se crean las passkeys, sin `https://`).
+
+Opcionales: `SPONSOR_SECRET` (pagar comisiones con cuenta propia), `CRON_SECRET` (sin ella se aceptan solo los pedidos del scheduler de Vercel), `REGISTRO_CLAVE` (sin ella se deriva de `DATABASE_URL`), `FCM_SERVICE_ACCOUNT` (push).
 
 Reglas que rompieron despliegues anteriores:
 - Vercel compila cada `.ts` sin bundler: los imports relativos llevan `.js` y `tsconfig` usa `NodeNext`.
