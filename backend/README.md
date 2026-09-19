@@ -51,6 +51,8 @@ Desde la raíz, `./correr-local.sh` levanta la API en :3310 y la web en :5310.
 
 Preset **Hono**, raíz `backend/`, entrada `src/index.ts`. El esquema se aplica solo al arrancar.
 
+Nombres de proyecto elegidos: **orbita-cosmos-api** y **orbita-cosmos** para la web. Los nombres `orbita-web`, `orbita-backend` y `orbita` en vercel.app ya están tomados por otras personas.
+
 Variables necesarias:
 - `DATABASE_URL`: la agrega la integración de Neon (Storage, Neon, Connect).
 - `ORIGENES_WEB`: los orígenes exactos de la web, separados por coma (por ejemplo `https://orbita.cosmospay.lat`). No hay dominios de Vercel permitidos por defecto, porque los nombres de `*.vercel.app` los puede tomar cualquiera: `orbita-web.vercel.app` ya es de otra persona.
