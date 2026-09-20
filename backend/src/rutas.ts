@@ -574,14 +574,27 @@ export function crearApp(deps: Deps): App {
   app.get("/api/cron/latidos", requiereDb, autenticaCron, async (c) => {
     let sincronizados = 0;
     if (deps.cadena) {
-      const abiertos = await db().query<{ id: string }>("select id from vinculos where estado in ('propuesto', 'activo')");
-      for (const { id: vid } of abiertos) {
-        const v = await leerVinculo(vid);
-        try {
-          if ((await sincronizar(v, await cadena().leer(v.adulto_stellar, v.disp_stellar), null)) !== v.estado) sincronizados++;
-        } catch (e) {
-          if (!(e instanceof ErrorCadena)) throw e;
-        }
+      // Tope y lotes en paralelo: con muchos vínculos abiertos, una consulta a la cadena
+      // por uno solo se ahoga contra el tiempo límite del cron. Si algún día se supera el
+      // tope, hace falta paginar por un cursor; por ahora alcanza para no bloquear el latido.
+      const TOPE = 500;
+      const LOTE = 8;
+      const abiertos = await db().query<{ id: string }>(
+        `select id from vinculos where estado in ('propuesto', 'activo') order by creado asc limit ${TOPE}`,
+      );
+      for (let i = 0; i < abiertos.length; i += LOTE) {
+        const resultados = await Promise.all(
+          abiertos.slice(i, i + LOTE).map(async ({ id: vid }) => {
+            const v = await leerVinculo(vid);
+            try {
+              return (await sincronizar(v, await cadena().leer(v.adulto_stellar, v.disp_stellar), null)) !== v.estado;
+            } catch (e) {
+              if (!(e instanceof ErrorCadena)) throw e;
+              return false;
+            }
+          }),
+        );
+        sincronizados += resultados.filter(Boolean).length;
       }
     }
 

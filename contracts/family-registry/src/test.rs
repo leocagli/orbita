@@ -234,6 +234,43 @@ fn writes_keep_the_link_and_instance_alive() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn cannot_downgrade_an_active_consent() {
+    let (e, client, parent, child) = setup();
+    e.mock_all_auths();
+    link_active(&e, &client, &parent, &child); // versión 1, Active
+
+    // Alguien con la firma del adulto intenta volver a la versión 1: no puede,
+    // porque ya rige y bajarla sería hacer firmar al menor un consentimiento viejo.
+    client.propose(&parent, &child, &hash(&e, 1), &1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn cannot_downgrade_a_pending_consent() {
+    let (e, client, parent, child) = setup();
+    e.mock_all_auths();
+    client.propose(&parent, &child, &hash(&e, 1), &3);
+
+    client.propose(&parent, &child, &hash(&e, 2), &2);
+}
+
+#[test]
+fn relinking_after_revocation_can_reuse_any_version() {
+    let (e, client, parent, child) = setup();
+    e.mock_all_auths();
+    link_active(&e, &client, &parent, &child); // versión 1
+    client.revoke(&child, &parent, &child);
+
+    // Revocado, no hay nada que degradar: se puede volver a empezar en la versión 1.
+    client.propose(&parent, &child, &hash(&e, 1), &1);
+
+    let link = client.get(&parent, &child).unwrap();
+    assert_eq!(link.status, LinkStatus::Pending);
+    assert_eq!(link.consent_version, 1);
+}
+
+#[test]
 fn relinking_after_revocation_needs_the_child_again() {
     let (e, client, parent, child) = setup();
     e.mock_all_auths();

@@ -89,6 +89,27 @@ const direccionDe = (e: xdr.SorobanAuthorizationEntry) =>
     ? Address.fromScAddress(e.credentials().address().address()).toString()
     : null;
 
+const esperar = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Un 429 o un 5xx del RPC es pasajero: se reintenta con espera creciente. */
+function pasajero(e: unknown): boolean {
+  const estado = (e as { response?: { status?: number }; status?: number })?.response?.status ?? (e as { status?: number })?.status;
+  if (estado === 429 || (typeof estado === "number" && estado >= 500)) return true;
+  const texto = String((e as Error)?.message ?? e);
+  return /429|too many requests|timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed|502|503|504/i.test(texto);
+}
+
+export async function conReintentos<T>(fn: () => Promise<T>, intentos = 4, base = 250): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= intentos - 1 || e instanceof ErrorCadena || !pasajero(e)) throw e;
+      await esperar(base * 2 ** i);
+    }
+  }
+}
+
 export function crearCadena(cfg: ConfigCadena): Cadena {
   if (!cfg.sponsorSecret && !cfg.relayerUrl) throw new Error("Hace falta sponsorSecret o relayerUrl");
   const servidor = new rpc.Server(cfg.rpcUrl, { allowHttp: cfg.rpcUrl.startsWith("http://") });
@@ -97,7 +118,7 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
   const anclas = new Contract(cfg.anclas);
 
   async function construir(op: xdr.Operation) {
-    const cuenta = await servidor.getAccount(sponsor?.publicKey() ?? cfg.fuenteLectura);
+    const cuenta = await conReintentos(() => servidor.getAccount(sponsor?.publicKey() ?? cfg.fuenteLectura));
     return new TransactionBuilder(new Account(cuenta.accountId(), cuenta.sequenceNumber()), {
       fee: "1000000",
       networkPassphrase: cfg.passphrase,
@@ -109,23 +130,29 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
 
   async function simular(op: xdr.Operation) {
     const tx = await construir(op);
-    const sim = await servidor.simulateTransaction(tx);
+    const sim = await conReintentos(() => servidor.simulateTransaction(tx));
     if (rpc.Api.isSimulationError(sim)) throw new ErrorCadena("simulacion_fallida", sim.error);
     return { tx, sim };
   }
 
   async function esperarExito(hash: string) {
-    const final = await servidor.pollTransaction(hash, { attempts: 30 });
+    const final = await conReintentos(() => servidor.pollTransaction(hash, { attempts: 30 }));
     if (final.status !== "SUCCESS") throw new ErrorCadena("transaccion_fallida", `${final.status} ${hash}`);
     return hash;
   }
 
   async function porRelayer(func: xdr.HostFunction, auth: xdr.SorobanAuthorizationEntry[]) {
-    const r = await fetch(cfg.relayerUrl!, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-client-name": "orbita-backend", "x-client-version": "0.2" },
-      body: JSON.stringify({ func: func.toXDR("base64"), auth: auth.map((a) => a.toXDR("base64")) }),
-    });
+    const r = await conReintentos(() =>
+      fetch(cfg.relayerUrl!, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-client-name": "orbita-backend", "x-client-version": "0.2" },
+        body: JSON.stringify({ func: func.toXDR("base64"), auth: auth.map((a) => a.toXDR("base64")) }),
+      }).then((res) => {
+        // Solo se reintenta lo pasajero; un rechazo del relayer se resuelve abajo.
+        if (res.status === 429 || res.status >= 500) throw Object.assign(new Error(`relayer HTTP ${res.status}`), { status: res.status });
+        return res;
+      }),
+    );
     const cuerpo = (await r.json().catch(() => null)) as { success?: boolean; data?: { hash?: string }; error?: string; code?: string } | null;
     if (!cuerpo?.success || !cuerpo.data?.hash) {
       throw new ErrorCadena(cuerpo?.code === "SIMULATION_FAILED" ? "simulacion_fallida" : "relayer_rechazo", cuerpo?.error ?? `HTTP ${r.status}`);
@@ -140,7 +167,7 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
     const { tx, sim } = await simular(Operation.invokeHostFunction({ func, auth }));
     const lista = rpc.assembleTransaction(tx, sim).build();
     lista.sign(sponsor);
-    const envio = await servidor.sendTransaction(lista);
+    const envio = await conReintentos(() => servidor.sendTransaction(lista));
     if (envio.status === "ERROR") throw new ErrorCadena("envio_rechazado", envio.errorResult?.toXDR("base64"));
     return esperarExito(envio.hash);
   }
@@ -212,7 +239,7 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
 const POR_DEFECTO = {
   rpc: "https://soroban-testnet.stellar.org",
   passphrase: "Test SDF Network ; September 2015",
-  familyRegistry: "CAQDKJ62HKUQTURQAEGKHPAIC3DQK36A6QR4IHH2IYW4EI7EAVENFJ6M",
+  familyRegistry: "CA5SSO56XW6XGQJTZXTOM25XPTFL5C5IQOSGQ55GD6CSRKQP3MKZFKLD",
   anclas: "CCGNGLJ5ZMNRIJB4GURJISTDEJYLIHOBNS2ZKF7TEGAVQ7DIINV4YVZN",
   // Relayer público de testnet que usa smart-account-kit (SDF + OpenZeppelin Channels).
   relayer: "https://smart-account-relayer-proxy.sdf-ecosystem.workers.dev",

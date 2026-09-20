@@ -5,13 +5,15 @@
 
 import { SmartAccountKit } from "smart-account-kit";
 import { IndexedDBStorage } from "smart-account-kit/storage";
-import { Address, rpc, scValToNative, xdr } from "@stellar/stellar-sdk";
+import { rpc, xdr } from "@stellar/stellar-sdk";
 import { api } from "./api";
 import { API_URL } from "./config";
-import { CUENTA_WASM_HASH, DOMINIOS_DE_CUENTAS, FAMILY_REGISTRY, PASSPHRASE, RPC_URL, VERIFICADOR_WEBAUTHN } from "./contratos";
+import { CUENTA_WASM_HASH, DOMINIOS_DE_CUENTAS, PASSPHRASE, RED, RPC_URL, VERIFICADOR_WEBAUTHN } from "./contratos";
+import { verificarEntrada, type Accion } from "./verificar";
 
 export type Rol = "adulto" | "adolescente";
-export type Accion = "propose" | "accept" | "revoke";
+export type { Accion };
+export { verificarEntrada };
 
 /** Una firma vale solo por unos 5 minutos (60 ledgers): si el envío falla, no queda reutilizable. */
 const VIDA_DE_FIRMA_LEDGERS = 60;
@@ -42,6 +44,7 @@ export async function crearCuenta(rol: Rol, nombre: string): Promise<{ contrato:
   if (!DOMINIOS_DE_CUENTAS.includes(window.location.hostname)) {
     throw new Error("Las cuentas se crean solo desde el sitio principal de Órbita.");
   }
+  await verificarRed();
   const kit = kitPara(rol);
   const r = await kit.createWallet("Órbita", nombre, { autoSubmit: true });
   const envio = r.submitResult;
@@ -58,27 +61,23 @@ export async function reconectar(rol: Rol) {
 }
 
 /**
- * Rechaza cualquier entrada que no sea `accion` sobre family-registry, sin llamadas
- * anidadas y con la cuenta propia entre los argumentos.
+ * Confirma que el RPC sea la red que la web tiene compilada. Si testnet se resetea o
+ * alguien apunta la web a otra red, las passkeys firmarían contra cadenas distintas.
  */
-export function verificarEntrada(entrada: xdr.SorobanAuthorizationEntry, accion: Accion, propia: string) {
-  const raiz = entrada.rootInvocation();
-  const funcion = raiz.function();
-  if (funcion.switch() !== xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn()) {
-    throw new Error("La firma pedida no es una llamada a un contrato.");
-  }
-  const llamada = funcion.contractFn();
-  const contrato = Address.fromScAddress(llamada.contractAddress()).toString();
-  const nombre = llamada.functionName().toString();
-  if (contrato !== FAMILY_REGISTRY) throw new Error("La firma pedida es para otro contrato. No se firmó nada.");
-  if (nombre !== accion) throw new Error(`Se pidió firmar "${nombre}" en lugar de "${accion}". No se firmó nada.`);
-  if (raiz.subInvocations().length > 0) throw new Error("La firma pedida incluye otras llamadas. No se firmó nada.");
-  const argumentos = llamada.args().map((a) => scValToNative(a));
-  if (!argumentos.includes(propia)) throw new Error("La firma pedida no es sobre tu cuenta. No se firmó nada.");
+let redConfirmada: Promise<void> | null = null;
+export function verificarRed(): Promise<void> {
+  redConfirmada ??= servidor.getNetwork().then(({ passphrase }) => {
+    if (passphrase !== PASSPHRASE) {
+      redConfirmada = null;
+      throw new Error(`El servidor de Stellar no está en ${RED}. No se firmó nada.`);
+    }
+  });
+  return redConfirmada;
 }
 
 /** Firma con la passkey cada entrada de autorización que armó el backend, después de verificarla. */
 export async function firmarEntradas(rol: Rol, accion: Accion, entradas: string[]): Promise<string[]> {
+  await verificarRed();
   const kit = kitPara(rol);
   if (!kit.isConnected) await kit.connectWallet({ prompt: true });
   const propia = kit.contractId;

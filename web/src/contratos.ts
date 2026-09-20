@@ -5,7 +5,7 @@
 export const RED = "testnet";
 export const RPC_URL = "https://soroban-testnet.stellar.org";
 export const PASSPHRASE = "Test SDF Network ; September 2015";
-export const FAMILY_REGISTRY = "CAQDKJ62HKUQTURQAEGKHPAIC3DQK36A6QR4IHH2IYW4EI7EAVENFJ6M";
+export const FAMILY_REGISTRY = "CA5SSO56XW6XGQJTZXTOM25XPTFL5C5IQOSGQ55GD6CSRKQP3MKZFKLD";
 export const ANCLAS = "CCGNGLJ5ZMNRIJB4GURJISTDEJYLIHOBNS2ZKF7TEGAVQ7DIINV4YVZN";
 
 // Cuenta inteligente de OpenZeppelin y verificador WebAuthn que publica smart-account-kit.

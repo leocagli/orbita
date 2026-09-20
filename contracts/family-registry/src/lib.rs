@@ -38,6 +38,8 @@ pub enum Error {
     AlreadyRevoked = 5,
     /// El menor intentó aceptar un consentimiento distinto del propuesto.
     ConsentMismatch = 6,
+    /// La nueva versión de consentimiento no es más nueva que la vigente o pendiente.
+    ConsentVersionNotIncreasing = 7,
 }
 
 #[contracttype]
@@ -110,6 +112,12 @@ impl FamilyRegistry {
     ///
     /// Si el vínculo ya existía, en cualquier estado, vuelve a `Pending`: un
     /// consentimiento nuevo exige un asentimiento nuevo del menor.
+    ///
+    /// Mientras el vínculo está `Pending` o `Active`, la versión nueva tiene que
+    /// ser mayor que la vigente: así nadie puede hacer firmar al menor un
+    /// consentimiento más viejo que el que ya rigió, ni pisar una propuesta
+    /// reciente con una anterior. Después de `Revoked` no hay nada que
+    /// degradar, así que se puede volver a empezar con cualquier versión.
     pub fn propose(
         e: &Env,
         parent: Address,
@@ -121,6 +129,12 @@ impl FamilyRegistry {
             panic_with_error!(e, Error::SameAddress);
         }
         parent.require_auth();
+
+        if let Some(existing) = read_link(e, &parent, &child) {
+            if existing.status != LinkStatus::Revoked && consent_version <= existing.consent_version {
+                panic_with_error!(e, Error::ConsentVersionNotIncreasing);
+            }
+        }
 
         let link = Link {
             status: LinkStatus::Pending,

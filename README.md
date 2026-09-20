@@ -62,7 +62,7 @@ cd web && pnpm build
 | `revoke(by, parent, child)` | adulto o menor | Pasa a `Revoked` y registra quién revocó. |
 | `get(parent, child)` | ninguna | Devuelve el vínculo. |
 
-Cada escritura extiende el TTL del vínculo y de la instancia a 180 días cuando quedan menos de 30.
+Cada escritura extiende el TTL del vínculo y de la instancia a 180 días cuando quedan menos de 30. Mientras el vínculo está `Pending` o `Active`, `propose` exige una `consent_version` mayor que la vigente, para que nadie pueda hacer firmar al menor un consentimiento más viejo. Después de `Revoked` se puede volver a empezar con cualquier versión.
 
 ### anclas
 
@@ -86,11 +86,11 @@ No existen `transfer`, `transfer_from`, `approve` ni `approve_for_all`.
 
 ## Testnet
 
-Desplegados con Stellar CLI 28.0.0 (protocolo 28). family-registry y anclas se redesplegaron el 2026-09-19, después de revisar la integración con las skills de Stellar.
+Desplegados con Stellar CLI 28.0.0 (protocolo 28). family-registry y anclas se redesplegaron el 2026-09-19; family-registry se redesplegó de nuevo el 2026-09-20, con la validación de versión de consentimiento, después de revisar la integración con las skills de Stellar.
 
 | Contrato | ID |
 |---|---|
-| family-registry | [`CAQDKJ62HKUQTURQAEGKHPAIC3DQK36A6QR4IHH2IYW4EI7EAVENFJ6M`](https://lab.stellar.org/r/testnet/contract/CAQDKJ62HKUQTURQAEGKHPAIC3DQK36A6QR4IHH2IYW4EI7EAVENFJ6M) |
+| family-registry | [`CA5SSO56XW6XGQJTZXTOM25XPTFL5C5IQOSGQ55GD6CSRKQP3MKZFKLD`](https://lab.stellar.org/r/testnet/contract/CA5SSO56XW6XGQJTZXTOM25XPTFL5C5IQOSGQ55GD6CSRKQP3MKZFKLD) |
 | anclas | [`CCGNGLJ5ZMNRIJB4GURJISTDEJYLIHOBNS2ZKF7TEGAVQ7DIINV4YVZN`](https://lab.stellar.org/r/testnet/contract/CCGNGLJ5ZMNRIJB4GURJISTDEJYLIHOBNS2ZKF7TEGAVQ7DIINV4YVZN) |
 | learning-badges | [`CDSNCELUGNKQ7ECT7J7MYL2UC6J2ROYMCSLFFAYUPKZMDMXWNUWBGWQZ`](https://lab.stellar.org/r/testnet/contract/CDSNCELUGNKQ7ECT7J7MYL2UC6J2ROYMCSLFFAYUPKZMDMXWNUWBGWQZ) |
 
@@ -98,13 +98,27 @@ Desplegados con Stellar CLI 28.0.0 (protocolo 28). family-registry y anclas se r
 - **Mantenimiento de TTL.** El workflow `mantener-ttl.yml` necesita el secreto `STELLAR_MANTENIMIENTO_SECRET` con una cuenta de testnet cualquiera.
 - **Cuenta de despliegue:** es la identidad local `protege-deployer` (`GCPEDBHF2IOZU5LRJDAWLE4MGMNAHWNJF532O6I6G273NTU6AGRCD47I`). Además de desplegar, es admin de `learning-badges` y la fuente de solo lectura del backend para simular.
 
-Prueba de punta a punta del 2026-09-19 con passkeys virtuales y el relayer público de testnet: `propose`, `accept`, anclaje y `revoke` confirmados en cadena.
+Prueba de punta a punta del 2026-09-20 con passkeys virtuales, pagando con cuenta propia: `propose`, `accept`, anclaje y `revoke` confirmados en cadena contra el family-registry nuevo.
+
+## Revisión con las skills de Stellar (2026-09-19 y 2026-09-20)
+
+Se bajó el catálogo completo de skills.stellar.org (oficiales y de comunidad) y se compararon contra el código. De 37 skills, sirven de verdad `smart-contracts`, `dapp` y `data` (oficiales) y las de la comunidad sobre errores comunes en Soroban y pruebas de passkeys con WebAuthn. El resto trata tokens, pagos, anchors o DeFi, que Órbita no tiene.
+
+Lo que encontraron y ya está corregido:
+- **Degradar el consentimiento.** `propose` aceptaba cualquier `consent_version`, así que alguien con la firma del adulto podía volver a una versión vieja del consentimiento mientras el vínculo estaba vigente. Ahora exige una versión mayor, salvo después de una revocación.
+- **Sin reintentos ante el RPC.** Las llamadas a Stellar no reintentaban ante un 429 o un error pasajero del servidor. Ahora `backend/src/stellar.ts` reintenta con espera creciente.
+- **Sin chequeo de red en la web.** La web podía firmar aunque el RPC no estuviera en la red esperada. Ahora `verificarRed()` lo confirma antes de crear una cuenta o firmar.
+- **La defensa de firmas no tenía tests.** `verificarEntrada`, que rechaza firmar otra cosa que no sea la acción elegida, ya tiene 6 tests en `web/test/verificar.test.ts`.
+- **El cron de latidos sin tope.** Recorría todos los vínculos abiertos uno por uno. Ahora tiene un tope y los sincroniza en lotes.
 
 ## Pendientes conocidos
 
 - **Recuperación de cuenta.** La passkey queda atada al dominio. Conviene un dominio propio y un segundo firmante antes de salir de testnet.
 - **Reglas de contexto.** La web firma siempre con la regla 0 de la cuenta inteligente.
 - **Reset de testnet.** No se detecta solo; hay que redesplegar a mano.
+- **Sin analizador estático de contratos.** Falta correr `cargo scout-audit` o un detector parecido antes de una auditoría real.
+- **Auditoría pública sin verificación en cadena.** `/v1/auditoria/anclajes` lee la tabla local; no compara contra el evento `Anclado` de la red con `getEvents`.
+- **Relayer público sin respaldo.** Si el relayer de testnet de SDF desaparece, no hay alternativa configurada.
 
 ## Créditos y licencia
 
