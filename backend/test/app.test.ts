@@ -61,6 +61,10 @@ class CadenaFalsa implements Cadena {
     this.insignias.set(clave, tokenId);
     return { tokenId, tx: `tx-insignia-${++this.n}` };
   }
+  verificacionDeAnclaje: boolean | null = true;
+  async verificarAnclaje(_txHash: string, _hashHex: string, _filas: number) {
+    return this.verificacionDeAnclaje;
+  }
 }
 
 let db: Db;
@@ -411,7 +415,19 @@ describe("registro y anclaje", () => {
 
     const pub = await llamar("GET", "/v1/auditoria/anclajes");
     expect(pub.json.anclajes).toHaveLength(1);
-    expect(pub.json.anclajes[0]).toMatchObject({ hash_registro: ultima.hash, filas: 3, url: expect.stringContaining("tx-ancla") });
+    expect(pub.json.anclajes[0]).toMatchObject({ hash_registro: ultima.hash, filas: 3, url: expect.stringContaining("tx-ancla"), verificado_en_cadena: true });
+  });
+
+  it("si el RPC no puede confirmar el último anclaje, lo dice sin romper la lista", async () => {
+    await familia();
+    await llamar("GET", "/api/cron/latidos", undefined, CRON);
+    cadena.verificacionDeAnclaje = null;
+    const sinConfirmar = await llamar("GET", "/v1/auditoria/anclajes");
+    expect(sinConfirmar.json.anclajes[0].verificado_en_cadena).toBeNull();
+
+    cadena.verificacionDeAnclaje = false;
+    const noCoincide = await llamar("GET", "/v1/auditoria/anclajes");
+    expect(noCoincide.json.anclajes[0].verificado_en_cadena).toBe(false);
   });
 
   it("la cadena del registro verifica en público y detecta una fila editada", async () => {

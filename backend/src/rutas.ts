@@ -711,14 +711,32 @@ export function crearApp(deps: Deps): App {
 
   // ---------- Auditoría ----------
 
-  /** Público: cada anclaje del registro de consentimientos en Stellar. */
+  /**
+   * Público: cada anclaje del registro de consentimientos en Stellar. El más reciente se
+   * confirma en vivo contra la red (no contra esta base): así nadie tiene que confiar en
+   * que Órbita anotó bien su propio anclaje. Los anteriores no se revisan en cada pedido
+   * porque el RPC público no guarda transacciones viejas y no vale la pena el costo.
+   */
   app.get("/v1/auditoria/anclajes", requiereDb, async (c) => {
     const filas = await db().query<{ hash_registro: string; filas: number; tx: string; creado: string }>(
       "select hash_registro, filas, tx, creado from anclajes order by id desc limit 60",
     );
+    let verificadoEnCadena: boolean | null = null;
+    if (filas[0] && deps.cadena) {
+      try {
+        verificadoEnCadena = await deps.cadena.verificarAnclaje(filas[0].tx, filas[0].hash_registro, Number(filas[0].filas));
+      } catch (e) {
+        if (!(e instanceof ErrorCadena)) throw e;
+      }
+    }
     return c.json({
       red: deps.cadena?.red ?? null,
-      anclajes: filas.map((f) => ({ ...f, filas: Number(f.filas), url: deps.cadena?.explorador(f.tx) ?? null })),
+      anclajes: filas.map((f, i) => ({
+        ...f,
+        filas: Number(f.filas),
+        url: deps.cadena?.explorador(f.tx) ?? null,
+        verificado_en_cadena: i === 0 ? verificadoEnCadena : null,
+      })),
     });
   });
 

@@ -51,6 +51,12 @@ export interface Cadena {
   insigniaDe(to: string, kind: string): Promise<number | null>;
   /** Otorga la insignia `kind` a `to`. Devuelve null si ya la tenía (no es un error). */
   otorgarInsignia(to: string, kind: string): Promise<{ tokenId: number; tx: string } | null>;
+  /**
+   * Confirma contra la red, no contra nuestra base, que `txHash` publicó ese hash con esas
+   * filas en el contrato `anclas`. `null` si el RPC ya no tiene esa transacción (los nodos
+   * públicos no la guardan para siempre): en ese caso no se pudo verificar, no es que falló.
+   */
+  verificarAnclaje(txHash: string, hashHex: string, filas: number): Promise<boolean | null>;
 }
 
 export class ErrorCadena extends Error {
@@ -259,6 +265,33 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
       if (!/^[0-9a-f]{64}$/.test(hashHex)) throw new ErrorCadena("hash_invalido");
       const op = anclas.call("anclar", bytes32(hashHex), nativeToScVal(filas, { type: "u32" }));
       return enviarConAuth(op.body().invokeHostFunctionOp().hostFunction(), []);
+    },
+
+    async verificarAnclaje(txHash, hashHex, filas) {
+      let r;
+      try {
+        r = await conReintentos(() => servidor.getTransaction(txHash));
+      } catch {
+        return null;
+      }
+      // NOT_FOUND: el RPC público solo guarda unos días de transacciones. No es que el
+      // anclaje sea falso, es que ya no se puede confirmar por esta vía.
+      if (r.status !== "SUCCESS") return r.status === "NOT_FOUND" ? null : false;
+      const idAnclas = Buffer.from(StrKey.decodeContract(cfg.anclas));
+      const hashEsperado = Buffer.from(hashHex, "hex");
+      for (const porOperacion of r.events?.contractEventsXdr ?? []) {
+        for (const evento of porOperacion) {
+          const idEvento = evento.contractId() as unknown as Buffer | undefined;
+          if (!idEvento || !Buffer.from(idEvento).equals(idAnclas)) continue;
+          const cuerpo = evento.body().v0();
+          const topicos = cuerpo.topics();
+          if (topicos.length < 2 || scValToNative(topicos[0]) !== "anclado") continue;
+          const hashEvento = scValToNative(topicos[1]) as Buffer;
+          const datos = scValToNative(cuerpo.data()) as { filas: number };
+          if (Buffer.isBuffer(hashEvento) && hashEvento.equals(hashEsperado) && Number(datos.filas) === filas) return true;
+        }
+      }
+      return false;
     },
 
     insigniaDe: leerInsignia,

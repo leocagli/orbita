@@ -112,14 +112,19 @@ Lo que encontraron y ya está corregido:
 - **La defensa de firmas no tenía tests.** `verificarEntrada`, que rechaza firmar otra cosa que no sea la acción elegida, ya tiene 6 tests en `web/test/verificar.test.ts`.
 - **El cron de latidos sin tope.** Recorría todos los vínculos abiertos uno por uno. Ahora tiene un tope y los sincroniza en lotes.
 
+## Fortalecido después (2026-09-20)
+
+- **Auditoría pública verificada en cadena.** `/v1/auditoria/anclajes` ya no confía solo en la tabla local: el anclaje más reciente se confirma en vivo contra la red, leyendo el evento `Anclado` de la transacción con `getTransaction`. Si el RPC ya no tiene esa transacción, lo dice (`verificado_en_cadena: null`), en vez de fingir que está mal.
+- **Analizador estático de contratos:** se intentó instalar `cargo-scout-audit`, pero necesita un toolchain nightly específico que no se pudo bajar (ver más abajo). Se corrió `cargo clippy --all-targets` en los tres contratos, sin advertencias.
+
 ## Pendientes conocidos
 
 - **Recuperación de cuenta.** La passkey queda atada al dominio. Conviene un dominio propio y un segundo firmante antes de salir de testnet.
 - **Reglas de contexto.** La web firma siempre con la regla 0 de la cuenta inteligente.
 - **Reset de testnet.** No se detecta solo; hay que redesplegar a mano.
-- **Sin analizador estático de contratos.** Falta correr `cargo scout-audit` o un detector parecido antes de una auditoría real.
-- **Auditoría pública sin verificación en cadena.** `/v1/auditoria/anclajes` lee la tabla local; no compara contra el evento `Anclado` de la red con `getEvents`.
+- **Falta `cargo scout-audit`.** Pide el toolchain `nightly-2025-08-07`, que no se pudo instalar. Reintentar cuando haya espacio en disco y de vuelta la conexión a los servidores de `rustup`.
 - **Relayer público sin respaldo.** Si el relayer de testnet de SDF desaparece, no hay alternativa configurada.
+- **Verificación en cadena solo del último anclaje.** Los anteriores no se revisan en cada pedido porque el RPC público no guarda transacciones viejas.
 
 ## Créditos y licencia
 
