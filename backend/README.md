@@ -55,6 +55,11 @@ Nombres de proyecto elegidos: **orbitaar7-api** y **orbitaar7** para la web, es 
 
 Al desplegar: en la API, `ORIGENES_WEB=https://orbitaar7.vercel.app`. En la web, `VITE_API_URL=https://orbitaar7-api.vercel.app` y `VITE_DOMINIO_WEB=orbitaar7.vercel.app`.
 
+Todo eso lo hace `scripts/desplegar-vercel.sh`, que crea los dos proyectos, carga las variables, publica y comprueba el resultado. Necesita dos archivos con permisos 600, que el script nunca imprime:
+
+- `~/.config/orbita/vercel-token`: un token de https://vercel.com/account/tokens
+- `~/.config/orbita/database-url`: la cadena de conexión de Neon
+
 Variables necesarias:
 - `DATABASE_URL`: la agrega la integración de Neon (Storage, Neon, Connect).
 - `ORIGENES_WEB`: los orígenes exactos de la web, separados por coma (por ejemplo `https://orbita.cosmospay.lat`). No hay dominios de Vercel permitidos por defecto, porque los nombres de `*.vercel.app` los puede tomar cualquiera: `orbita-web.vercel.app` ya es de otra persona.

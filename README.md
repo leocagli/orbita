@@ -28,7 +28,8 @@ App educativa para adolescentes y sus familias frente a las apuestas online. Pro
 ├── web                    web en Vite + TypeScript con passkeys
 ├── scripts
 │   ├── desplegar-testnet.sh   compila y despliega family-registry y anclas
-│   └── mantener-ttl.sh        extiende el TTL de contratos y WASM en testnet
+│   ├── mantener-ttl.sh        extiende el TTL de contratos y WASM en testnet
+│   └── desplegar-vercel.sh    publica la API y la web en Vercel con un token propio
 ├── .github/workflows      mantener-ttl.yml corre el script cada lunes
 ├── docs                   arquitectura y diseño
 └── correr-local.sh        API en :3310 y web en :5310
