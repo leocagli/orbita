@@ -9,6 +9,7 @@ import { type Accion, type Cadena, type EstadoCadena, ErrorCadena, esDireccion }
 import { AVISOS, CONSENTIMIENTOS, NOTA_NO_DIAGNOSTICO, versionVigente } from "./textos.js";
 import { ES_SEMANA, codigoDeSeisDigitos, horasEntre, id, semanaAnterior, semanaIso, sha256, token } from "./utiles.js";
 import { AYUDA as ayuda } from "./datos/ayuda.js";
+import { MODULO_POR_KIND, MODULOS } from "./datos/modulos.js";
 
 export interface Deps {
   db: Db | null;
@@ -513,6 +514,63 @@ export function crearApp(deps: Deps): App {
     }
     await db().query("update dispositivos set ultimo_latido = $2 where id = $1", [dispositivo.id, ahora()]);
     return c.json({ ok: true, avisos });
+  });
+
+  // ---------- Insignias educativas ----------
+
+  /** Los módulos y, si el adolescente ya tiene alguna insignia, con qué token y transacción. */
+  app.get("/v1/insignias", requiereDb, autenticaDispositivo, async (c) => {
+    const d = c.get("dispositivo");
+    const obtenidas = await db().query<{ kind: string; token_id: number; tx: string | null }>(
+      "select kind, token_id, tx from insignias_otorgadas where dispositivo_id = $1",
+      [d.id],
+    );
+    const porKind = new Map(obtenidas.map((o) => [o.kind, o]));
+    return c.json({
+      disponible: Boolean(deps.cadena?.insigniasDisponibles),
+      modulos: MODULOS.map((m) => {
+        const o = porKind.get(m.kind);
+        return { kind: m.kind, titulo: m.titulo, texto: m.texto, obtenida: o ? { token_id: o.token_id, tx: tx(o.tx) } : null };
+      }),
+    });
+  });
+
+  /** Otorga la insignia no transferible de un módulo. Idempotente: repetirla no hace nada. */
+  app.post("/v1/insignias/:kind/otorgar", requiereDb, limitar("insignias", 30, 3600), autenticaDispositivo, async (c) => {
+    const kind = c.req.param("kind");
+    if (!MODULO_POR_KIND.has(kind)) return c.json({ error: "modulo_desconocido" }, 404);
+    const d = c.get("dispositivo");
+
+    const [previa] = await db().query<{ token_id: number; tx: string | null }>(
+      "select token_id, tx from insignias_otorgadas where dispositivo_id = $1 and kind = $2",
+      [d.id, kind],
+    );
+    if (previa) return c.json({ ok: true, ya_tenida: true, token_id: previa.token_id, tx: tx(previa.tx) });
+    if (!deps.cadena?.insigniasDisponibles) return c.json({ error: "sin_insignias", detalle: "Falta ISSUER_SECRET" }, 503);
+
+    let resultado: Awaited<ReturnType<Cadena["otorgarInsignia"]>>;
+    try {
+      resultado = await cadena().otorgarInsignia(d.stellar, kind);
+    } catch (e) {
+      return errorDeCadena(c, e);
+    }
+    if (!resultado) {
+      // Ya la tenía en la cadena, pero acá no lo sabíamos: se busca el token para no perderlo.
+      const tokenId = await cadena().insigniaDe(d.stellar, kind);
+      if (tokenId === null) return c.json({ error: "cadena", codigo: "insignia_no_encontrada" }, 502);
+      await db().query(
+        `insert into insignias_otorgadas (dispositivo_id, kind, token_id, tx) values ($1, $2, $3, null)
+         on conflict (dispositivo_id, kind) do nothing`,
+        [d.id, kind, tokenId],
+      );
+      return c.json({ ok: true, ya_tenida: true, token_id: tokenId, tx: null });
+    }
+    await db().query(
+      `insert into insignias_otorgadas (dispositivo_id, kind, token_id, tx) values ($1, $2, $3, $4)
+       on conflict (dispositivo_id, kind) do nothing`,
+      [d.id, kind, resultado.tokenId, resultado.tx],
+    );
+    return c.json({ ok: true, ya_tenida: false, token_id: resultado.tokenId, tx: tx(resultado.tx) }, 201);
   });
 
   // ---------- Vínculo en Stellar ----------

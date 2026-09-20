@@ -42,6 +42,8 @@ Desde la raíz, `./correr-local.sh` levanta la API en :3310 y la web en :5310.
 | `POST /v1/vinculos/:id/cadena/enviar` | adulto o dispositivo | envía las entradas firmadas y sincroniza el estado |
 | `POST /v1/dispositivos/latido` | dispositivo | latido |
 | `POST /v1/dispositivos/eventos` | dispositivo | totales de pausas y eventos de protección |
+| `GET /v1/insignias` | dispositivo | módulos educativos y cuáles ya tienen insignia |
+| `POST /v1/insignias/:kind/otorgar` | dispositivo | otorga la insignia del módulo (idempotente) |
 | `GET /api/cron/latidos` | cron diario | sincroniza con la cadena, avisa "sin reportes", ancla el registro |
 | `GET /api/cron/resumen` | cron de los lunes | resumen semanal |
 | `GET /v1/auditoria/anclajes` | público | anclajes con enlace al explorador |
@@ -66,7 +68,7 @@ Variables necesarias:
 
 En la web, compilar con `VITE_API_URL` (URL del backend) y `VITE_DOMINIO_WEB` (dominio donde se crean las passkeys, sin `https://`).
 
-Opcionales: `SPONSOR_SECRET` (pagar comisiones con cuenta propia), `CRON_SECRET` (sin ella se aceptan solo los pedidos del scheduler de Vercel), `REGISTRO_CLAVE` (sin ella se deriva de `DATABASE_URL`), `FCM_SERVICE_ACCOUNT` (push).
+Opcionales: `SPONSOR_SECRET` (pagar comisiones con cuenta propia), `CRON_SECRET` (sin ella se aceptan solo los pedidos del scheduler de Vercel), `REGISTRO_CLAVE` (sin ella se deriva de `DATABASE_URL`), `FCM_SERVICE_ACCOUNT` (push), `ISSUER_SECRET` (otorgar insignias; sin ella se reusa `SPONSOR_SECRET` si tiene el rol `issuer`).
 
 Reglas que rompieron despliegues anteriores:
 - Vercel compila cada `.ts` sin bundler: los imports relativos llevan `.js` y `tsconfig` usa `NodeNext`.

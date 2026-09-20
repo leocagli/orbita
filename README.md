@@ -15,6 +15,7 @@ App educativa para adolescentes y sus familias frente a las apuestas online. Pro
 1. **Cuentas sin frase semilla.** Cada persona tiene una cuenta inteligente de OpenZeppelin cuya llave es una passkey, creada con smart-account-kit.
 2. **Vínculo on-chain.** El adulto firma `propose` y el adolescente firma `accept` en `family-registry`. Cualquiera de los dos puede firmar `revoke`. El backend paga las comisiones pero no puede firmar por nadie.
 3. **Anclaje.** Una vez por día el backend publica en `anclas` el último hash del registro de consentimientos, que está encadenado por hash. Cualquiera puede verificarlo en `/v1/auditoria/verificar`.
+4. **Insignias educativas.** Al terminar un módulo corto sobre apuestas, el adolescente recibe en `learning-badges` una insignia no transferible. Ni el backend ni nadie más puede sacársela ni moverla a otra cuenta.
 
 ## Estructura
 
@@ -82,7 +83,7 @@ No pide firma a propósito. La procedencia la da la cuenta del backend que enví
 | `balance`, `owner_of`, `name`, `symbol`, `token_uri` | ninguna | Lectura estándar de NFT. |
 | `grant_role`, `revoke_role` y demás | admin | Control de acceso de OpenZeppelin. |
 
-No existen `transfer`, `transfer_from`, `approve` ni `approve_for_all`.
+No existen `transfer`, `transfer_from`, `approve` ni `approve_for_all`. Reactivado como parte del producto el 2026-09-20: antes estaba desplegado pero sin conectar a la web ni al backend. La identidad `protege-deployer` tiene el rol `issuer`; el backend usa `ISSUER_SECRET` para otorgar insignias (por defecto, reusa `SPONSOR_SECRET` si tiene ese rol). Los módulos educativos están en `backend/src/datos/modulos.ts`.
 
 ## Testnet
 

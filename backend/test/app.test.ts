@@ -17,7 +17,9 @@ class CadenaFalsa implements Cadena {
   red = "testnet";
   contrato = "CFALSO";
   reservadas = [RESERVADA];
+  insigniasDisponibles = true;
   estados = new Map<string, EstadoCadena>();
+  insignias = new Map<string, number>();
   anclados: string[] = [];
   n = 0;
   explorador = (h: string) => `https://explorer/${h}`;
@@ -48,6 +50,16 @@ class CadenaFalsa implements Cadena {
   async anclar(hash: string, filas: number) {
     this.anclados.push(`${hash}:${filas}`);
     return `tx-ancla-${++this.n}`;
+  }
+  async insigniaDe(to: string, kind: string) {
+    return this.insignias.get(`${to}|${kind}`) ?? null;
+  }
+  async otorgarInsignia(to: string, kind: string) {
+    const clave = `${to}|${kind}`;
+    if (this.insignias.has(clave)) return null;
+    const tokenId = this.insignias.size;
+    this.insignias.set(clave, tokenId);
+    return { tokenId, tx: `tx-insignia-${++this.n}` };
   }
 }
 
@@ -202,6 +214,50 @@ describe("vínculo en Stellar", () => {
     expect((await llamar("GET", "/v1/adultos/yo", undefined, adulto.token)).json.vinculos[0].estado).toBe("revocado");
     expect(enviados.map((a) => a.texto)).toEqual(["Juli desvinculó su teléfono."]);
     expect(dispositivo.token).toBeTruthy();
+  });
+});
+
+describe("insignias educativas", () => {
+  it("lista los módulos sin ninguna insignia otorgada todavía", async () => {
+    const { dispositivo } = await familia();
+    const r = await llamar("GET", "/v1/insignias", undefined, dispositivo.token);
+    expect(r.json.disponible).toBe(true);
+    expect(r.json.modulos).toHaveLength(3);
+    expect(r.json.modulos.every((m: { obtenida: unknown }) => m.obtenida === null)).toBe(true);
+  });
+
+  it("otorga la insignia de un módulo y repetirlo es idempotente", async () => {
+    const { dispositivo } = await familia();
+    const primera = await llamar("POST", "/v1/insignias/casa_siempre_gana/otorgar", undefined, dispositivo.token);
+    expect(primera.status).toBe(201);
+    expect(primera.json).toMatchObject({ ok: true, ya_tenida: false });
+    expect(primera.json.tx.hash).toBeTruthy();
+
+    const segunda = await llamar("POST", "/v1/insignias/casa_siempre_gana/otorgar", undefined, dispositivo.token);
+    expect(segunda.status).toBe(200);
+    expect(segunda.json).toMatchObject({ ok: true, ya_tenida: true, token_id: primera.json.token_id });
+
+    const lista = await llamar("GET", "/v1/insignias", undefined, dispositivo.token);
+    const modulo = lista.json.modulos.find((m: { kind: string }) => m.kind === "casa_siempre_gana");
+    expect(modulo.obtenida.token_id).toBe(primera.json.token_id);
+  });
+
+  it("rechaza un módulo que no existe", async () => {
+    const { dispositivo } = await familia();
+    const r = await llamar("POST", "/v1/insignias/no_existe/otorgar", undefined, dispositivo.token);
+    expect(r.status).toBe(404);
+  });
+
+  it("sin token no entra", async () => {
+    expect((await llamar("GET", "/v1/insignias")).status).toBe(401);
+  });
+
+  it("sin un emisor configurado, responde que no están disponibles", async () => {
+    const { dispositivo } = await familia();
+    cadena.insigniasDisponibles = false;
+    const r = await llamar("POST", "/v1/insignias/casa_siempre_gana/otorgar", undefined, dispositivo.token);
+    expect(r.status).toBe(503);
+    expect(r.json.error).toBe("sin_insignias");
   });
 });
 

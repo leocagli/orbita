@@ -33,8 +33,10 @@ export interface ParamsVinculo {
 export interface Cadena {
   red: string;
   contrato: string;
-  /** Direcciones del sistema (fuente de simulación, sponsor): no pueden ser de usuarios. */
+  /** Direcciones del sistema (fuente de simulación, sponsor, emisor): no pueden ser de usuarios. */
   reservadas: string[];
+  /** Si hay un emisor configurado con el rol issuer, para otorgar insignias educativas. */
+  insigniasDisponibles: boolean;
   explorador(hash: string): string;
   /** Envía el despliegue de una cuenta inteligente ya autorizado por el deployer del kit. */
   crearCuenta(funcB64: string, authB64: string[]): Promise<string>;
@@ -45,6 +47,10 @@ export interface Cadena {
   leer(parent: string, child: string): Promise<EstadoCadena | null>;
   /** Publica `hashHex` (32 bytes) con el contrato `anclas`. */
   anclar(hashHex: string, filas: number): Promise<string>;
+  /** Id de la insignia `kind` que tiene `to`, si la tiene. Solo lectura, sin firma. */
+  insigniaDe(to: string, kind: string): Promise<number | null>;
+  /** Otorga la insignia `kind` a `to`. Devuelve null si ya la tenía (no es un error). */
+  otorgarInsignia(to: string, kind: string): Promise<{ tokenId: number; tx: string } | null>;
 }
 
 export class ErrorCadena extends Error {
@@ -58,9 +64,13 @@ export interface ConfigCadena {
   passphrase: string;
   contrato: string;
   anclas: string;
+  /** Contrato learning-badges. Sin él (o sin issuerSecret) no se otorgan insignias. */
+  insignias?: string;
   /** Con clave propia pagamos nosotros; si no, paga el relayer. */
   sponsorSecret?: string;
   relayerUrl?: string;
+  /** Clave de una dirección con el rol `issuer` en learning-badges. */
+  issuerSecret?: string;
   /** Cuenta existente usada solo como fuente para simular (sin firmar nada). */
   fuenteLectura: string;
   /** Hashes WASM de cuentas inteligentes que se aceptan desplegar. */
@@ -116,9 +126,11 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
   const sponsor = cfg.sponsorSecret ? Keypair.fromSecret(cfg.sponsorSecret) : null;
   const contrato = new Contract(cfg.contrato);
   const anclas = new Contract(cfg.anclas);
+  const issuer = cfg.issuerSecret ? Keypair.fromSecret(cfg.issuerSecret) : null;
+  const insignias = cfg.insignias ? new Contract(cfg.insignias) : null;
 
-  async function construir(op: xdr.Operation) {
-    const cuenta = await conReintentos(() => servidor.getAccount(sponsor?.publicKey() ?? cfg.fuenteLectura));
+  async function construirDesde(fuente: string, op: xdr.Operation) {
+    const cuenta = await conReintentos(() => servidor.getAccount(fuente));
     return new TransactionBuilder(new Account(cuenta.accountId(), cuenta.sequenceNumber()), {
       fee: "1000000",
       networkPassphrase: cfg.passphrase,
@@ -128,11 +140,25 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
       .build();
   }
 
-  async function simular(op: xdr.Operation) {
-    const tx = await construir(op);
+  const construir = (op: xdr.Operation) => construirDesde(sponsor?.publicKey() ?? cfg.fuenteLectura, op);
+
+  /** Por defecto simula desde la fuente de lectura o el sponsor; `fuente` la reemplaza. */
+  async function simular(op: xdr.Operation, fuente?: string) {
+    const tx = fuente ? await construirDesde(fuente, op) : await construir(op);
     const sim = await conReintentos(() => servidor.simulateTransaction(tx));
     if (rpc.Api.isSimulationError(sim)) throw new ErrorCadena("simulacion_fallida", sim.error);
     return { tx, sim };
+  }
+
+  const simboloDeInsignia = (kind: string) => nativeToScVal(kind, { type: "symbol" });
+
+  /** Lectura pública: no hace falta ninguna firma ni tener issuer configurado. */
+  async function leerInsignia(to: string, kind: string): Promise<number | null> {
+    if (!insignias) return null;
+    const op = insignias.call("badge_of", Address.fromString(to).toScVal(), simboloDeInsignia(kind));
+    const { sim } = await simular(op);
+    const valor = sim.result?.retval;
+    return valor ? Number(scValToNative(valor)) : null;
   }
 
   async function esperarExito(hash: string) {
@@ -177,7 +203,8 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
     contrato: cfg.contrato,
     // Si un usuario usara una de estas, la simulación le daría credenciales de cuenta
     // fuente en vez de una entrada de autorización para firmar.
-    reservadas: [cfg.fuenteLectura, ...(sponsor ? [sponsor.publicKey()] : [])],
+    reservadas: [cfg.fuenteLectura, ...(sponsor ? [sponsor.publicKey()] : []), ...(issuer ? [issuer.publicKey()] : [])],
+    insigniasDisponibles: Boolean(insignias && issuer),
     explorador: (hash) => `https://stellar.expert/explorer/${cfg.red}/tx/${hash}`,
 
     async crearCuenta(funcB64, authB64) {
@@ -233,6 +260,29 @@ export function crearCadena(cfg: ConfigCadena): Cadena {
       const op = anclas.call("anclar", bytes32(hashHex), nativeToScVal(filas, { type: "u32" }));
       return enviarConAuth(op.body().invokeHostFunctionOp().hostFunction(), []);
     },
+
+    insigniaDe: leerInsignia,
+
+    // El emisor firma otorgando: como es la cuenta que paga la transacción, alcanza con
+    // su firma sobre el sobre, sin una entrada de autorización aparte para su dirección.
+    async otorgarInsignia(to, kind) {
+      if (!issuer || !insignias) throw new ErrorCadena("insignias_no_configuradas");
+      const op = insignias.call("award", Address.fromString(issuer.publicKey()).toScVal(), Address.fromString(to).toScVal(), simboloDeInsignia(kind));
+      let tx, sim;
+      try {
+        ({ tx, sim } = await simular(op, issuer.publicKey()));
+      } catch (e) {
+        if (e instanceof ErrorCadena && /AlreadyAwarded|Error\(Contract, #1\)/.test(e.message)) return null;
+        throw e;
+      }
+      const lista = rpc.assembleTransaction(tx, sim).build();
+      lista.sign(issuer);
+      const envio = await conReintentos(() => servidor.sendTransaction(lista));
+      if (envio.status === "ERROR") throw new ErrorCadena("envio_rechazado", envio.errorResult?.toXDR("base64"));
+      const hash = await esperarExito(envio.hash);
+      const tokenId = sim.result?.retval ? Number(scValToNative(sim.result.retval)) : -1;
+      return { tokenId, tx: hash };
+    },
   };
 }
 
@@ -241,6 +291,7 @@ const POR_DEFECTO = {
   passphrase: "Test SDF Network ; September 2015",
   familyRegistry: "CA5SSO56XW6XGQJTZXTOM25XPTFL5C5IQOSGQ55GD6CSRKQP3MKZFKLD",
   anclas: "CCGNGLJ5ZMNRIJB4GURJISTDEJYLIHOBNS2ZKF7TEGAVQ7DIINV4YVZN",
+  insignias: "CDSNCELUGNKQ7ECT7J7MYL2UC6J2ROYMCSLFFAYUPKZMDMXWNUWBGWQZ",
   // Relayer público de testnet que usa smart-account-kit (SDF + OpenZeppelin Channels).
   relayer: "https://smart-account-relayer-proxy.sdf-ecosystem.workers.dev",
   // Cuenta de testnet existente; solo se usa su dirección pública para simular.
@@ -256,8 +307,12 @@ export function cadenaDesdeEntorno(env: NodeJS.ProcessEnv): Cadena {
     passphrase: env.STELLAR_PASSPHRASE ?? POR_DEFECTO.passphrase,
     contrato: env.FAMILY_REGISTRY_ID ?? POR_DEFECTO.familyRegistry,
     anclas: env.ANCLAS_ID ?? POR_DEFECTO.anclas,
+    insignias: env.INSIGNIAS_ID ?? POR_DEFECTO.insignias,
     sponsorSecret: env.SPONSOR_SECRET || undefined,
     relayerUrl: env.SPONSOR_SECRET ? undefined : (env.RELAYER_URL ?? POR_DEFECTO.relayer),
+    // Sin una clave propia de emisor, si hay SPONSOR_SECRET y tiene el rol issuer (como en
+    // desarrollo), se reusa: no hace falta una segunda cuenta solo para otorgar insignias.
+    issuerSecret: env.ISSUER_SECRET || env.SPONSOR_SECRET || undefined,
     fuenteLectura: env.FUENTE_LECTURA ?? POR_DEFECTO.fuenteLectura,
     wasmCuentas: (env.CUENTA_WASM_HASHES ?? POR_DEFECTO.cuentaWasm).split(","),
     red: env.STELLAR_RED ?? "testnet",
@@ -272,6 +327,7 @@ export function configPublica(env: NodeJS.ProcessEnv) {
     passphrase: env.STELLAR_PASSPHRASE ?? POR_DEFECTO.passphrase,
     family_registry: env.FAMILY_REGISTRY_ID ?? POR_DEFECTO.familyRegistry,
     anclas: env.ANCLAS_ID ?? POR_DEFECTO.anclas,
+    insignias: env.INSIGNIAS_ID ?? POR_DEFECTO.insignias,
     cuenta_wasm_hash: (env.CUENTA_WASM_HASHES ?? POR_DEFECTO.cuentaWasm).split(",")[0],
     webauthn_verifier: env.WEBAUTHN_VERIFIER ?? POR_DEFECTO.webauthn,
     pago_comisiones: env.SPONSOR_SECRET ? "cuenta propia" : "relayer",

@@ -98,4 +98,16 @@ create table if not exists anclajes (
   tx text not null,
   creado timestamptz not null default now()
 );
+
+-- Una insignia no transferible por módulo educativo completado (contrato learning-badges).
+-- tx es null en el caso raro de que la insignia ya existiera en la cadena antes de que
+-- Órbita se enterara (por ejemplo, tras un reintento manual).
+create table if not exists insignias_otorgadas (
+  dispositivo_id text not null references dispositivos(id),
+  kind text not null,
+  token_id integer not null,
+  tx text,
+  otorgada timestamptz not null default now(),
+  primary key (dispositivo_id, kind)
+);
 `;

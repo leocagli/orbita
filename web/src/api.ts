@@ -41,6 +41,13 @@ export interface VinculoAdolescente {
   cadena: VinculoAdulto["cadena"];
 }
 
+export interface Modulo {
+  kind: string;
+  titulo: string;
+  texto: string;
+  obtenida: { token_id: number; tx: TxCadena | null } | null;
+}
+
 export interface Servicio {
   nombre: string;
   gestiona: string;

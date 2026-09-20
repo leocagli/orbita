@@ -1,5 +1,5 @@
 import "./estilos.css";
-import { api, ErrorApi, type Servicio, type TxCadena, type VinculoAdolescente, type VinculoAdulto } from "./api";
+import { api, ErrorApi, type Modulo, type Servicio, type TxCadena, type VinculoAdolescente, type VinculoAdulto } from "./api";
 import { crearCuenta, operarVinculo, reconectar, type Rol } from "./cuenta";
 import { FAMILY_REGISTRY } from "./contratos";
 
@@ -37,6 +37,8 @@ function mensajeDeError(e: unknown): string {
       sin_base: "El servicio todavía no tiene base de datos configurada.",
       sin_cadena: "El servicio todavía no tiene la cuenta de Stellar configurada.",
       accion_no_permitida: "Esa acción no corresponde en este momento. Recargá para ver el estado actual.",
+      sin_insignias: "Las insignias no están disponibles por ahora. Probá de nuevo más tarde.",
+      modulo_desconocido: "Ese módulo no existe. Recargá la página.",
     };
     return conocidos[c ?? ""] ?? `No se pudo completar (${c ?? e.status}).`;
   }
@@ -238,6 +240,17 @@ function tarjetaVinculoAdulto(v: VinculoAdulto, nota: string) {
     ${cuerpo}${txsDe(v.cadena)}<div class="resultado" aria-live="polite"></div></div>`;
 }
 
+function tarjetaModulo(m: Modulo, disponible: boolean) {
+  const pie = m.obtenida
+    ? `<p class="suave chico">Insignia obtenida.${txLink("Ver en Stellar", m.obtenida.tx)}</p>`
+    : disponible
+      ? `<div class="acciones"><button class="secundario" data-modulo="${esc(m.kind)}">Ya lo leí, quiero mi insignia</button></div>`
+      : `<p class="suave chico">Las insignias no están disponibles por ahora.</p>`;
+  return `<div class="tarjeta modulo">
+    <details><summary>${m.obtenida ? "✓ " : ""}${esc(m.titulo)}</summary><p class="suave">${esc(m.texto)}</p></details>
+    ${pie}<div class="resultado" aria-live="polite"></div></div>`;
+}
+
 // ---------- adolescente ----------
 
 async function vistaAdolescente() {
@@ -283,7 +296,10 @@ async function altaAdolescente() {
 
 async function panelAdolescente(s: Sesion) {
   window.clearInterval(refresco);
-  const yo = await api<{ vinculos: VinculoAdolescente[] }>("GET", "/v1/dispositivos/yo", undefined, s.token);
+  const [yo, insignias] = await Promise.all([
+    api<{ vinculos: VinculoAdolescente[] }>("GET", "/v1/dispositivos/yo", undefined, s.token),
+    api<{ disponible: boolean; modulos: Modulo[] }>("GET", "/v1/insignias", undefined, s.token).catch(() => ({ disponible: false, modulos: [] as Modulo[] })),
+  ]);
   api("POST", "/v1/dispositivos/latido", { proteccion_activa: true, version_app: "web-0.1" }, s.token).catch(() => null);
   const v = yo.vinculos.at(-1);
   let estado = "";
@@ -302,6 +318,9 @@ async function panelAdolescente(s: Sesion) {
     <h1>Hola, ${esc(s.alias)}</h1>
     <p class="suave chico">Tu cuenta Stellar: <a href="${explorar("contract", s.contrato)}" target="_blank" rel="noopener">${corto(s.contrato)} ↗</a></p>
     <div class="tarjeta ${v?.estado === "propuesto" ? "destacada" : ""}">${estado}${v ? txsDe(v.cadena) : ""}<div class="resultado" aria-live="polite"></div></div>
+    <h2>Aprender y ganar una insignia</h2>
+    <p class="suave chico">Cada insignia queda en tu cuenta de Stellar. No se puede vender ni transferir: es solo tuya.</p>
+    ${insignias.modulos.map((m) => tarjetaModulo(m, insignias.disponible)).join("")}
     <div class="tarjeta" id="ayuda"><h2>¿Necesitás hablar con alguien?</h2>
       <p class="suave">Si llamás o escribís, nadie recibe un aviso. Es gratis y confidencial.</p>
       <label for="provincia">Tu provincia</label>
@@ -314,6 +333,14 @@ async function panelAdolescente(s: Sesion) {
       conBoton(b, accion === "accept" ? "Aceptando en Stellar…" : "Firmando en Stellar…", async () => {
         if (accion === "revoke" && !confirm("¿Querés cortar el vínculo? El adulto va a recibir un aviso.")) return;
         await operarVinculo("adolescente", s.token, v!.vinculo_id, accion);
+        await panelAdolescente(s);
+      });
+  });
+  document.querySelectorAll<HTMLButtonElement>("button[data-modulo]").forEach((b) => {
+    const kind = b.dataset.modulo!;
+    b.onclick = () =>
+      conBoton(b, "Otorgando la insignia…", async () => {
+        await api("POST", `/v1/insignias/${encodeURIComponent(kind)}/otorgar`, undefined, s.token);
         await panelAdolescente(s);
       });
   });
